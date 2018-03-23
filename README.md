@@ -2,6 +2,10 @@
 
 TETyper is a command line tool designed for typing a specific transposable element (TE) of interest from paired-end sequencing data. It determines single nucleotide variants (SNVs) and deletions within the TE, as well as flanking sequences surrounding the TE.
 
+TETyper can be cited as follows:
+
+[Sheppard et al bioRxiv 288001; doi: https://doi.org/10.1101/288001](https://www.biorxiv.org/content/early/2018/03/23/288001)
+
 
 ## Requirements
 
