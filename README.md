@@ -6,8 +6,11 @@ TETyper can be cited as follows:
 
 [Sheppard et al bioRxiv 288001; doi: https://doi.org/10.1101/288001](https://www.biorxiv.org/content/early/2018/03/23/288001)
 
+## Intstallations
 
-## Requirements
+### Using Github
+
+_Requirements_
 
 - python 2.7 (with Biopython, pysam, vcf)
 - samtools (tested on version 1.4.1)
@@ -15,6 +18,15 @@ TETyper can be cited as follows:
 - spades (tested on version 3.10.1)
 - BLAST+ (tested on version 2.2.25)
 
+Go to the TETyper folder and write:
+
+```
+python setup.py install
+```
+
+### Using Bioconda
+
+To be added.
 
 ## Running TETyper
 
@@ -133,7 +145,7 @@ The summary file contains 11-12 columns. These are:
 
 TETyper was designed with the blaKPC transposon Tn4401 in mind. A Tn4401b reference sequence is provided with TETyper (Tn4401b-1.fasta), as well as example profile definitions for SNVs / deletions with respect to this reference (struct_profiles.txt and snp_profiles.txt). To use these additional resources, TEtyper can be run as follows:
 ```
-TETyper.py --ref Tn4401b-1.fasta --fq1 FORWARD_READS.fq.gz --fq2 REVERSE_READS.fq.gz --outprefix OUTPREFIX --flank_len FLANK_LENGTH --struct_profiles struct_profiles.txt --snp_profiles snp_profiles.txt --show_region 7202-8083
+TETyper.py --ref tests/Tn4401b-1.fasta --fq1 FORWARD_READS.fq.gz --fq2 REVERSE_READS.fq.gz --outprefix OUTPREFIX --flank_len FLANK_LENGTH --struct_profiles tests/struct_profiles.txt --snp_profiles tests/snp_profiles.txt --show_region 7202-8083
 ```
 
 
@@ -143,7 +155,7 @@ TETyper provides options for specifying the mapped bam file and/or assembly file
 
 For example, newly discovered profiles can be manually appended to the profile files. TETyper can then be rerun with the modified profile files, without redoing all the processing steps, by specifiying the mapped bam file and spades assembly as parameters instead of the original reads. E.g.:
 ```
-TETyper.py --ref Tn4401b-1.fasta --outprefix RERUN --bam OUTPREFIX.bam --assembly OUTPREFIX_spades/contigs.fasta --flank_len FLANK_LENGTH --struct_profiles STRUCT_PROFILES_MODIFIED.txt --snp_profiles SNP_PROFILES_MODIFIED.txt --show_region 7202-8083
+TETyper.py --ref tests/Tn4401b-1.fasta --outprefix RERUN --bam OUTPREFIX.bam --assembly OUTPREFIX_spades/contigs.fasta --flank_len FLANK_LENGTH --struct_profiles STRUCT_PROFILES_MODIFIED.txt --snp_profiles SNP_PROFILES_MODIFIED.txt --show_region 7202-8083
 ```
 
 The --bam and --assembly options can also be useful for re-running samples with different parameters for flanking sequence extraction (e.g. a different flank length).
