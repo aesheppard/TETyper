@@ -27,7 +27,7 @@ import pysam
 import vcf
 from collections import Counter
 
-VERSION = '1.0'
+VERSION = '1.1'
 
 
 class ProfileError(Exception):
@@ -138,6 +138,8 @@ class TETyper:
         self.outprefix = args.outprefix
         logfile = self.outprefix + '.log'
         self.loghandle = None
+        if args.no_overwrite and os.path.isfile(logfile):
+            self.exitonerror('File {0} already exists. Exiting.'.format(logfile))       
         try:
             self.loghandle = open(logfile, 'w')
         except IOError as e:
@@ -149,6 +151,7 @@ class TETyper:
         logger.addHandler(logfilehandler)
 
         logging.info('TETyper version {0}'.format(VERSION))
+        logging.info('TETyper command: {0}'.format(' '.join(sys.argv)))
 
         self.ref = args.ref
         try:
@@ -158,10 +161,19 @@ class TETyper:
         if len(contigs) != 1:
             self.exitonerror('Error reading reference file {0}: Expected 1 contig, found {1}'.format(self.ref, len(contigs)))
         self.ref_start = 1
-        self.ref_contig, self.ref_end = contigs.items()[0]  
+        self.ref_contig, self.ref_end = list(contigs.items())[0]  
         logging.info('Successfully read in reference of length {0}'.format(self.ref_end))
 
-        self.refdb = args.refdb if args.refdb else self.ref
+        # if blast database is explicitly specified, make sure it actually exists
+        if args.refdb:
+            self.refdb = args.refdb
+            self.check_file(self.refdb + '.nin')
+        # otherwise check for blast database with default naming and create one if it doesn't already exist
+        else:
+            self.refdb = self.ref
+            if not os.path.isfile(self.refdb + '.nin'):
+                logging.info('Blast database not found. Creating database automatically.')
+                self.run_external_call([['makeblastdb', '-dbtype', 'nucl', '-in', self.ref]], 'blast database creation')
 
         if args.bam:
             self.bam = args.bam
@@ -172,6 +184,10 @@ class TETyper:
             if not ((len(self.fq_files) == 2 and args.fq1 and args.fq2) or (len(self.fq_files) == 1 and self.interleaved == True)):
                 self.exitonerror('Invalid input. Exactly one of the following must be provided: (--fq1 AND --fq2) OR --fq12 OR --bam')
             self.bam_provided = False
+
+        if not self.bam_provided and not os.path.isfile(self.ref + '.bwt'):
+            logging.info('Bwa index files not found. Creating index automatically.')
+            self.run_external_call([['bwa', 'index', self.ref]], 'bwa indexing')
 
         if args.assembly:
             self.assembly = args.assembly
@@ -199,7 +215,7 @@ class TETyper:
             self.show_region = None
         
         if args.threads <= 0:
-            exitonerror('--threads must be a positive integer.')
+            self.exitonerror('--threads must be a positive integer.')
         self.threads = args.threads
 
 
@@ -287,8 +303,8 @@ class TETyper:
             self.check_file(fq_file)
             bwa_mem_args.append(fq_file)
 
-        samtools_view_args = ['samtools', 'view', '-bu', '-F2048', '-G12', '-']
-        samtools_sort_args = ['samtools', 'sort', '-o', self.bam , '-']
+        samtools_view_args = ['samtools', 'view', '-bu', '-F2048', '-G12', '--threads', str(self.threads), '-']
+        samtools_sort_args = ['samtools', 'sort', '-o', self.bam , '--threads', str(self.threads), '-']
 
         self.run_external_call([bwa_mem_args, samtools_view_args, samtools_sort_args], 'mapping', self.bam)
 
@@ -299,8 +315,8 @@ class TETyper:
             return
 
         # Convert mapped reads to fastq format
-        samtools_namesort_args = ['samtools', 'sort', '-n', self.bam]
-        samtools_fastq_args = ['samtools', 'fastq']
+        samtools_namesort_args = ['samtools', 'sort', '-n', '--threads', str(self.threads), self.bam]
+        samtools_fastq_args = ['samtools', 'fastq', '--threads', str(self.threads)]
         fq_prefix = self.outprefix + '_mappedreads'
         fq_args = ['-1', fq_prefix + '_1.fq', '-2', fq_prefix + '_2.fq']  # Same for both samtools fastq and spades
         samtools_fastq_args.extend(fq_args)
@@ -312,7 +328,7 @@ class TETyper:
 
         # Run assembly
         spadesdir = self.outprefix + '_spades'
-        spades_args = ['spades.py', '-t', str(self.threads), '--cov-cutoff', 'auto', '--careful', '-o', spadesdir] + fq_args
+        spades_args = ['spades.py', '-t', str(self.threads), '-o', spadesdir] + fq_args + args.spades_params.split()
         self.run_external_call([spades_args], 'spades assembly', spadesdir + '/')
         self.assembly = spadesdir + '/contigs.fasta'
 
@@ -325,7 +341,7 @@ class TETyper:
             return
 
         self.blastfile = self.outprefix + '_blast.txt'
-        blastn_args = ['blastn', '-db', self.refdb, '-query', self.assembly, '-outfmt', '6', '-out', self.blastfile]
+        blastn_args = ['blastn', '-db', self.refdb, '-query', self.assembly, '-outfmt', '6', '-out', self.blastfile, '-num_threads', str(self.threads)]
         self.run_external_call([blastn_args], 'blastn', self.blastfile) 
 
 
@@ -512,7 +528,7 @@ class TETyper:
         for a in samfile.fetch(self.ref_contig, self.ref_start-1, self.ref_start):  # 0-based coordinates
             ref_posns = a.get_reference_positions(full_length=True)  # List of same length as read length, containing reference positions that each base is aligned to (None if a base is unaligned).
             # First test ensures that the start position is included in the alignment (i.e. if there's a deletion in the read at exactly this position, ignore as it's not possible to determine where the flanking sequence should start). Second test checks that a minimum length within the region of interest has been mapped to (avoiding spurious mapping). Note 0-based coordinates.
-            if self.ref_start-1 in ref_posns and len([pos for pos in ref_posns if pos >= self.ref_start-1 + (self.min_mapped_len - 1)]) > 0:
+            if self.ref_start-1 in ref_posns and len([pos for pos in ref_posns if pos is not None and pos >= self.ref_start-1 + (self.min_mapped_len - 1)]) > 0:
                 q_start = ref_posns.index(self.ref_start-1)  # Position in the read corresponding to the start position
                 lflank = a.query_sequence[q_start-self.flank_len:q_start]  # Flanking sequence for this read
                 lqual = a.query_qualities[q_start-self.flank_len:q_start]  # Corresponding quality values
@@ -524,7 +540,7 @@ class TETyper:
         # Fetch all reads with mapping that overlaps the end position
         for a in samfile.fetch(self.ref_contig, self.ref_end-1, self.ref_end):
             ref_posns = a.get_reference_positions(full_length=True)
-            if self.ref_end-1 in ref_posns and len([pos for pos in ref_posns if pos <= self.ref_end-1 - (self.min_mapped_len - 1)]) > 0:
+            if self.ref_end-1 in ref_posns and len([pos for pos in ref_posns if pos is not None and pos <= self.ref_end-1 - (self.min_mapped_len - 1)]) > 0:
                 q_end = ref_posns.index(self.ref_end-1)
                 rflank = a.query_sequence[q_end+1:q_end+self.flank_len+1]
                 rqual = a.query_qualities[q_end+1:q_end+self.flank_len+1]
@@ -574,13 +590,14 @@ class TETyper:
 def get_argsparser():
     parser = argparse.ArgumentParser(description = 'TETyper version {0}. Given a set of input reads and a reference, TETyper performs typing to identify: 1. deletions and SNP variation relative to the reference, and 2. the immediate (up to ~20bp) sequence(s) flanking the reference.'.format(VERSION))
     parser.add_argument('--outprefix', help = 'Prefix to use for output files. Required.', required = True)
-    parser.add_argument('--ref', help = 'Reference sequence in fasta format. Must be indexed with bwa index. Required.', required = True)
-    parser.add_argument('--refdb', help = 'Blast database corresponding to reference file. If unspecified, blast database is assumed to have the same name as the reference file.')
+    parser.add_argument('--ref', help = 'Reference sequence in fasta format. If not already indexed with bwa, this will be created automatically. A blast database is also required, again this will be created automatically if it does not already exist. Required.', required = True)
+    parser.add_argument('--refdb', help = 'Blast database corresponding to reference file (this argument is only needed if the blast database was created with a different name).')
     parser.add_argument('--fq1', help = 'Forward reads. Can be gzipped.')
     parser.add_argument('--fq2', help = 'Reverse reads. Can be gzipped.')
     parser.add_argument('--fq12', help = 'Interleaved forward and reverse reads.')
     parser.add_argument('--bam', help = 'Bam file containing reads mapped to the given reference. If the reads have already been mapped, this option saves time compared to specifying the reads in fastq format. If this option is specified then --fq* are ignored.')
     parser.add_argument('--assembly', help = 'Use this assembly (fasta format) for detecting structural variants instead of generating a new one. This option saves time if an assembly is already available.')
+    parser.add_argument('--spades_params', help = 'Additional parameters for running spades assembly. Enclose in quotes and precede with a space. Default: " --cov-cutoff auto --disable-rr". Ignored if --assembly is specified.', default=' --cov-cutoff auto --disable-rr')
     parser.add_argument('--struct_profiles', help = 'File containing known structural variants. Tab separated format with two columns. First column is variant name. Second column contains a list of sequence ranges representing deletions relative to the reference, or "none" for no deletions. Each range should be written as "startpos-endpos", with multiple ranges ordered by start position and separated by a "|" with no extra whitespace.')
     parser.add_argument('--snp_profiles', help = 'File containing known SNP profiles. Tab separated format with three columns. First column: variant name, second column: homozygous SNPs, third column: heterozygous SNPs. SNPs should be written as "refPOSalt", where "POS" is the position of that SNP within the reference, "ref" is the reference base at that position (A, C, G or T), and "alt" is the variant base at that position (A, C, G or T for a homozygous SNP; M, R, W, S, Y or K for a heterozygous SNP). Multiple SNPs of the same type (homozygous or heterozygous) should be ordered by position and separated by a "|". "none" indicates no SNPs of the given type.')
     parser.add_argument('--flank_len', help = 'Length of flanking region to extract. Required.', type = int, required = True)
@@ -591,6 +608,7 @@ def get_argsparser():
     parser.add_argument('--show_region', help = 'Display presence/absence for a specific region of interest within the reference (e.g. to display blaKPC presence/absence with the Tn4401b-1 reference, use "7202-8083")')
     parser.add_argument('--threads', help = 'Number of threads to use for mapping and assembly steps. Default: 1', type = int, default = 1)
     parser.add_argument('-v', '--verbosity', help = 'Verbosity level for logging to stderr. 1 = ERROR, 2 = WARNING, 3 = INFO, 4 = DUBUG. Default: 3.', type = int, choices = [1,2,3,4], default = 3)
+    parser.add_argument('--no_overwrite', help = 'Flag to prevent accidental overwriting of previous output files. In this mode, the pipeline checks for a log file named according to the given output prefix. If it exists then the pipeline exits without modifying any files.', action = 'store_true')
     return(parser)
 
 
