@@ -1,0 +1,3 @@
+outprefix	fq1	fq2	bam
+test1	SRR1582895_sm_1.fq.gz	SRR1582895_sm_2.fq.gz	
+test2	SRR1582895_sm_1.fq.gz	SRR1582895_sm_2.fq.gz	

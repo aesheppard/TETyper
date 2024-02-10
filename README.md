@@ -11,16 +11,17 @@ TETyper can be cited as follows:
 
 Requirements:
 
-- python 2.7 or python 3 (with Biopython, pysam, pyvcf)
-- [samtools, bcftools](http://www.htslib.org/) (tested on version 1.4.1)
-- [bwa](http://bio-bwa.sourceforge.net/) (tested on version 0.7.12)
-- [spades](http://cab.spbu.ru/software/spades/) (tested on version 3.10.1)
-- [BLAST+](https://www.ncbi.nlm.nih.gov/books/NBK279690/) (tested on version 2.2.25)
+- python 3 (<3.11) (with Biopython, pysam, pyvcf3)
+- [samtools, bcftools](http://www.htslib.org/) (tested on version 1.7)
+- [bwa](http://bio-bwa.sourceforge.net/) (tested on version 0.7.17)
+- [spades](http://cab.spbu.ru/software/spades/) (tested on version 3.11.1)
+- [BLAST+](https://www.ncbi.nlm.nih.gov/books/NBK279690/) (tested on version 2.15.0)
+- [snakemake](https://snakemake.github.io/) (tested on version 7.32.4)
 
-TETyper is pip-installable, enabling automatic installation of python dependencies:
+TETyper is conda-installable, enabling automatic installation of python dependencies:
 
 ```
-pip install TETyper
+conda install TETyper
 ```
 
 To check whether TETyper is running correctly, a small test dataset has been provided. If the following command is executed:
@@ -42,9 +43,32 @@ Note that the exact values in the Left_flank_counts and Right_flank_counts colum
 
 ### Basic usage
 
-```
+When running one sample, you can run TETyper directly using this command:
+
+'''
 TETyper.py --ref REFERENCE.fasta --fq1 FORWARD_READS.fq.gz --fq2 REVERSE_READS.fq.gz --outprefix OUTPREFIX --flank_len FLANK_LENGTH
+'''
+If you want to run multiple samples, TETyper can be run via snakemake. For example, the test dataset can be run with:
+''' 
+snakemake --cores 1
+'''
+Parameters to run the test dataset are already provided in the config.json file.
+Parameters can be modified by directly editing the **config.json** file. If a parameter is not needed, write **null**.
+You can also provide a tab separated file called **sample_data.txt** (e.g. exported from Excel) in the following format for some of the parameters:
+
+| outprefix | fq1                      | fq2                      | bam            |
+| --------- | ------------------------ | ------------------------ | -------------- |
+| sample_1  | sample_1_fwd_reads.fq.gz | sample_1_rev_reads.fq.gz |                |
+| sample_2  | sample_2_fwd_reads.fq.gz | sample_2_rev_reads.fq.gz | sample_2.bam   |
+| sample_3  |                          |                          | sample_3.bam   |
+
+If you are new to TETyper, ignore the bam column (but still include it in the header line). See Advanced Usage below for an explanation of how to use it. 
+If both bam and fq files are provided, the bam file will be used.
+
 ```
+snakemake --cores *n*
+```
+n is the number of cores you want to use. For example, *snakemake --cores 4* uses 4 cores.
 
 ### Output
 
@@ -53,12 +77,13 @@ TETyper produces the following output files:
 - **OUTPREFIX.log**: Log file containing details of individual steps performed, as well as any errors
 - **OUTPREFIX.bam**: Reads mapped to REFERENCE.bam
 - **OUTPREFIX_mappedreads_1.fq, OUTPREFIX_mappedreads_2.fq**: Mapped reads converted to fastq format
-- **OUTPREFIX_spades**: Directory containing spades assembly from mapped reads
+- **OUTPREFIX_spades**: Directory containing spades assembly from mapped reads. By default, only contigs.fasta and spades.log are kept. See *--keep-spades* option below to keep all files produced by spades.
 - **OUTPREFIX_blast.txt**: Tabular blastn results comparing the spades assembly to REFERENCE.fasta
 - **OUTPREFIX.vcf**: SNVs identified
+- **all_summary.txt**: Summary of all results generated in various **OUTPREFIX_summary.txt** files.
 
 
-The summary file contains 11-12 columns. These are:
+The summary file contains up columns when running mode "all". These are:
 - **Deletions**: A list of sequence ranges corresponding to regions of the reference classified as deletions for this sample, or "none" for no deletions.
 - **Structural_variant**: If --struct_profiles is specified and the pattern of deletions above corresponds to one of these profiles, then the profile name is given, otherwise "unknown".
 - **SNPs_homozygous**: A list of homozygous SNPs identified, or "none".
@@ -72,6 +97,7 @@ The summary file contains 11-12 columns. These are:
 - **Right_flank_counts**: The number of high quality reads supporting each of the right flanking sequences.
 - **X_Y_presence**: If --show_region is specified as --show_region X-Y, this column shows 1 if the entirety of that region is classified as present (i.e. no overlap with deleted regions), or 0 otherwise. If --show_region is unspecified, this column is omitted.
 
+When running mode "variants", only columns 1-7 are produced. When running mode "flanks", only columns 8-11 are produced. Column 12 is present in mode "all" and "variants" if the option *--show-region* (see Advanced usage for more information) is enabled.
 
 ### Advanced usage (all options):
 -  -h, --help:            show this help message and exit
@@ -87,7 +113,6 @@ The summary file contains 11-12 columns. These are:
                         created with a different name).
 -  --fq1 FQ1:             Forward reads. Can be gzipped.
 -  --fq2 FQ2:             Reverse reads. Can be gzipped.
--  --fq12 FQ12:           Interleaved forward and reverse reads.
 -  --bam BAM:             Bam file containing reads mapped to the given
                         reference. If the reads have already been mapped, this
                         option saves time compared to specifying the reads in
@@ -149,12 +174,16 @@ The summary file contains 11-12 columns. These are:
                         steps. Default: 1
 -  -v, --verbosity:
                         Verbosity level for logging to stderr. 1 = ERROR, 2 =
-                        WARNING, 3 = INFO, 4 = DUBUG. Default: 3.
+                        WARNING, 3 = INFO, 4 = DEBUG. Default: 3.
 -  --no_overwrite:        Flag to prevent accidental overwriting of previous
                         output files. In this mode, the pipeline checks for a
                         log file named according to the given output prefix.
                         If it exists then the pipeline exits without modifying
                         any files.
+-   --keep-spades:      Keeps spades folder intact. Default: off (spades.log 
+                        and params.txt are always preserved.)
+-   --mode:             Run only variants (deletions, homo/heterozygous SNVs), only flank extraction, or whole
+                        pipeline. Options: "all", "flanks", "variants". Default: "all".                
 
 
 ### A note on the profile files
@@ -163,7 +192,7 @@ The arguments --struct_profiles and --snp_profiles enable the user to specify a 
 
 
 ### Suggested usage for KPC isolates
-
+§ send anna conda info
 TETyper was designed with the blaKPC transposon Tn4401 in mind. A Tn4401b reference sequence is provided with TETyper (Tn4401b-1.fasta), as well as example profile definitions for SNVs / deletions with respect to this reference (struct_profiles.txt and snp_profiles.txt). To use these, TETyper can be run as follows:
 ```
 TETyper.py --ref Tn4401b-1.fasta --fq1 FORWARD_READS.fq.gz --fq2 REVERSE_READS.fq.gz --outprefix OUTPREFIX --flank_len FLANK_LENGTH --struct_profiles struct_profiles.txt --snp_profiles snp_profiles.txt --show_region 7202-8083
@@ -173,9 +202,27 @@ TETyper.py --ref Tn4401b-1.fasta --fq1 FORWARD_READS.fq.gz --fq2 REVERSE_READS.f
 ### Re-running samples
 
 TETyper provides options for specifying the mapped bam file and/or assembly file in order to save processing time if the same samples are rerun with different parameters. For example, newly discovered profiles can be manually appended to the profile files. TETyper can then be rerun with the modified profile files, without redoing all the processing steps, by specifiying the mapped bam file and spades assembly as parameters instead of the original reads. E.g.:
-```
-TETyper.py --ref Tn4401b-1.fasta --outprefix RERUN --bam OUTPREFIX.bam --assembly OUTPREFIX_spades/contigs.fasta --flank_len FLANK_LENGTH --struct_profiles STRUCT_PROFILES_MODIFIED.txt --snp_profiles SNP_PROFILES_MODIFIED.txt --show_region 7202-8083
-```
+
 
 The --bam and --assembly options can also be useful for re-running samples with different parameters for flanking sequence extraction (e.g. a different flank length).
 
+
+### Changes in version ??
+- Removed support for reverse/forward interleaved fq files.
+- Updated dependencies to the latest versions (where possible).
+- Added options for running variant calling (deletions, homo/heterozygous SNVs) and flank extraction separately.
+- Implemented cleanup of files in the spades folder (with the option to retain them).
+-  Introduced ability to execute multiple samples concurrently using Snakemake.
+- Included a summary file encompassing all samples for easier processing.
+
+## A note on spades
+Before you can run TETyper, you must execute the following command one time:
+```
+source spades_corrector.sh
+```
+ However, you can also do the following things manually if you encounter any errors:
+- Find the folder where your base environment is located by typing
+```conda env list ``` (the path next to the environment TETyper)
+- Open *<YOUR_ENVIRONMENT_NAME>/share/spades-3.11.1*/share/spades/pyyaml3*
+- In line 126, change *if not isinstance(key, collections.Hashable)* to *if not isinstance(key, collections.abc.Hashable):* and save your changes.
+Thanks to MatthiasWilm for suggesting this fix (github link)
