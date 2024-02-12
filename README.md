@@ -12,12 +12,13 @@ TETyper can be cited as follows:
 Requirements:
 
 - python 3 (<3.11) (with Biopython, pysam, pyvcf3)
-- [samtools, bcftools](http://www.htslib.org/) (tested on version 1.7)
+- [samtools, bcftools](http://www.htslib.org/) (tested on version 1.18)
 - [bwa](http://bio-bwa.sourceforge.net/) (tested on version 0.7.17)
 - [spades](http://cab.spbu.ru/software/spades/) (tested on version 3.11.1)
 - [BLAST+](https://www.ncbi.nlm.nih.gov/books/NBK279690/) (tested on version 2.15.0)
 - [snakemake](https://snakemake.github.io/) (tested on version 7.32.4)
 
+*Still to be implemented*:
 TETyper is conda-installable, enabling automatic installation of python dependencies:
 
 ```
@@ -62,6 +63,7 @@ You can also provide a tab separated file called **sample_data.txt** (e.g. expor
 | sample_2  | sample_2_fwd_reads.fq.gz | sample_2_rev_reads.fq.gz | sample_2.bam   |
 | sample_3  |                          |                          | sample_3.bam   |
 
+Please note that if the sample_data.txt file is present, it will be used. Rename or delete it if you would like to use arguments from config.json.
 If you are new to TETyper, ignore the bam column (but still include it in the header line). See Advanced Usage below for an explanation of how to use it. 
 If both bam and fq files are provided, the bam file will be used.
 
@@ -192,7 +194,6 @@ The arguments --struct_profiles and --snp_profiles enable the user to specify a 
 
 
 ### Suggested usage for KPC isolates
-§ send anna conda info
 TETyper was designed with the blaKPC transposon Tn4401 in mind. A Tn4401b reference sequence is provided with TETyper (Tn4401b-1.fasta), as well as example profile definitions for SNVs / deletions with respect to this reference (struct_profiles.txt and snp_profiles.txt). To use these, TETyper can be run as follows:
 ```
 TETyper.py --ref Tn4401b-1.fasta --fq1 FORWARD_READS.fq.gz --fq2 REVERSE_READS.fq.gz --outprefix OUTPREFIX --flank_len FLANK_LENGTH --struct_profiles struct_profiles.txt --snp_profiles snp_profiles.txt --show_region 7202-8083
@@ -207,12 +208,12 @@ TETyper provides options for specifying the mapped bam file and/or assembly file
 The --bam and --assembly options can also be useful for re-running samples with different parameters for flanking sequence extraction (e.g. a different flank length).
 
 
-### Changes in version ??
+### Changes in version 1.2
 - Removed support for reverse/forward interleaved fq files.
 - Updated dependencies to the latest versions (where possible).
 - Added options for running variant calling (deletions, homo/heterozygous SNVs) and flank extraction separately.
 - Implemented cleanup of files in the spades folder (with the option to retain them).
--  Introduced ability to execute multiple samples concurrently using Snakemake.
+- Introduced ability to run multiple samples concurrently using Snakemake.
 - Included a summary file encompassing all samples for easier processing.
 
 ## A note on spades
@@ -222,7 +223,7 @@ source spades_corrector.sh
 ```
  However, you can also do the following things manually if you encounter any errors:
 - Find the folder where your base environment is located by typing
-```conda env list ``` (the path next to the environment TETyper)
-- Open *<YOUR_ENVIRONMENT_NAME>/share/spades-3.11.1*/share/spades/pyyaml3*
+```conda env list ``` (the path next to the environment)
+- Open *<PATH>/share/spades-3.11.1*/share/spades/pyyaml3*
 - In line 126, change *if not isinstance(key, collections.Hashable)* to *if not isinstance(key, collections.abc.Hashable):* and save your changes.
-Thanks to MatthiasWilm for suggesting this fix (github link)
+See https://github.com/ablab/spades/issues/873 for more information.
