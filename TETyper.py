@@ -17,17 +17,19 @@ GNU General Public License for more details.
 You should have received a copy of the GNU General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """
-
+import shutil
 import argparse
+from itertools import islice
 import sys
 import os
 import logging
 from subprocess import Popen, PIPE, STDOUT
 from Bio import SeqIO
 import pysam
-import time
 import vcf
 from collections import Counter
+import multiprocessing
+import copy
 
 VERSION = '1.2'
 
@@ -232,7 +234,7 @@ class TETyper:
                 self.run_external_call([['makeblastdb', '-dbtype', 'nucl', '-in', self.ref]], 'blast database creation')
 
         # Always use .bam file if provided.
-        if args.bam:
+        if args.bam != 'None':
             self.bam = args.bam
             self.bam_provided = True
         else:
@@ -260,6 +262,7 @@ class TETyper:
         self.min_qual = args.min_qual
         self.keep_spades = args.keep_spades
         self.mode = args.mode
+        self.tidy = args.tidy
 
         if args.show_region:
             self.show_region = args.show_region
@@ -779,11 +782,12 @@ def get_argsparser():
     Parse (and describe) arguments for TETyper pipeline
     """
     parser = argparse.ArgumentParser(description = 'TETyper version {0}. Given a set of input reads and a reference, TETyper performs typing to identify: 1. deletions and SNP variation relative to the reference, and 2. the immediate (up to ~20bp) sequence(s) flanking the reference.'.format(VERSION))
-    parser.add_argument('--outprefix', help = 'Prefix to use for output files. Required.', required = True)
+    parser.add_argument('--config', required = True)
+    parser.add_argument('--outprefix')
+    parser.add_argument('--fq1')
+    parser.add_argument('--fq2')
+    parser.add_argument('--bam')
     parser.add_argument('--ref', help = 'Reference sequence in fasta format. If not already indexed with bwa, this will be created automatically. A blast database is also required, again this will be created automatically if it does not already exist. Required.', required = True)
-    parser.add_argument('--fq1', help = 'Forward reads. Can be gzipped.')
-    parser.add_argument('--fq2', help = 'Reverse reads. Can be gzipped.')
-    parser.add_argument('--bam', help = 'Bam file containing reads mapped to the given reference. If the reads have already been mapped, this option saves time compared to specifying the reads in fastq format. If this option is specified then --fq* are ignored.')
     parser.add_argument('--refdb', help = 'Blast database corresponding to reference file (this argument is only needed if the blast database was created with a different name).')
     parser.add_argument('--assembly', help = 'Use this assembly (fasta format) for detecting structural variants instead of generating a new one. This option saves time if an assembly is already available.')
     parser.add_argument('--spades_params', help = 'Additional parameters for running spades assembly. Enclose in quotes and precede with a space. Default: " --cov-cutoff auto --disable-rr". Ignored if --assembly is specified.', default=' --cov-cutoff auto --disable-rr')
@@ -800,11 +804,80 @@ def get_argsparser():
     parser.add_argument('--no_overwrite', help = 'Flag to prevent accidental overwriting of previous output files. In this mode, the pipeline checks for a log file named according to the given output prefix. If it exists then the pipeline exits without modifying any files.', action = 'store_true')
     parser.add_argument('--keep_spades', help = 'Keep whole spades folder. Default is to only keep contigs.fasta and log file.', action = 'store_true')
     parser.add_argument('--mode', help = 'Run only variants (deletions, homo/heterozygous SNVs), only flank extraction, or whole pipeline. Options: "all", "flanks", "variants"', choices = ['all', 'flanks', 'variants'], default = 'all')
+    parser.add_argument('--tidy', help = 'Enabling this will move files from different samples (i.e. results, temp files and log files) into separate folders.', action = 'store_true')
     return(parser)
 
+def format_args(args):
+    if not os.path.isfile(args.config):
+        print("Config file could not be found.")
+        sys.exit(1)
+    all_args = []
+    outprefixes = []
+    with open(args.config, 'r') as f:
+        for line in islice(f, 1, None):
+            line = line.strip()
+            words = line.split("\t")
+            args_cp = copy.copy(args)
+            args_cp.outprefix = words[0]
+            args_cp.fq1 = words[1]
+            args_cp.fq2 = words[2]
+            args_cp.bam = words[3]
+            all_args.append(args_cp)
+            outprefixes.append(args_cp.outprefix)
+    f.close()
+    return all_args,outprefixes
 
+def process_fun(args):
+    new_typer = TETyper(args)
+    new_typer.run_typing()
+
+
+
+def create_summary(input_files, output_file='all_summary.txt'):
+    with open(output_file, 'w') as out_file:
+        header_written = False
+        for filename in input_files:
+            with open(f"{filename}_summary.txt", 'r') as file:
+                header = next(file, None)
+                if header is None:
+                    continue
+                header = header.strip()
+                if not header_written:
+                    out_file.write(header + '\n')
+                    header_written = True
+                data = next(file, None)
+                if data is None:
+                    continue
+                data = data.strip()
+                out_file.write(data + '\n')
+
+def tidy_dir(names):
+    for name in names:
+        if not os.path.exists(name):
+            os.makedirs(name)
+        else:
+
+            for item in os.listdir(name):
+                item_path = os.path.join(name, item)
+                if os.path.isfile(item_path):
+                    os.remove(item_path)
+                elif os.path.isdir(item_path):
+                    shutil.rmtree(item_path)
+
+        for item in os.listdir('.'):
+            if item.startswith(name):
+                shutil.move(item, name)
 if __name__ == '__main__':
     parser = get_argsparser()
     args = parser.parse_args()
-    typer = TETyper(args)
-    typer.run_typing()
+    user_args,outprefixes = format_args(args)
+    procs = []
+    for arg in user_args:
+        proc = multiprocessing.Process(target=process_fun,args=(arg,))
+        procs.append(proc)
+        proc.start()
+    for proc in procs:
+        proc.join()
+    create_summary(outprefixes)
+    if args.tidy:
+        tidy_dir(outprefixes)
