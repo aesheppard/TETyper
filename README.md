@@ -76,19 +76,18 @@ TETyper.py --config sample_data.txt --ref Tn4401b-1.fasta --flank_len 5 --struct
 
 This produces one `OUTPREFIX_summary.txt` per sample plus a combined `all_summary.txt` containing every sample's row (see Output below). A ready-to-use example, matching the provided test dataset, is in `sample_data.txt`.
 
-#### Making it as fast as possible
+#### Speeding things up
 
-Each sample's mapping/assembly/BLAST/variant-calling steps are single-pipeline and mostly CPU-bound, so there are two independent ways to add parallelism, and they multiply together:
+Two options control parallelism, and they multiply together:
 
-- **`--threads N`**: threads used *within* one sample's `bwa`/`samtools`/`spades`/`blastn` steps.
-- **`--jobs N`** (only relevant with `--config`): how many samples are processed *concurrently*.
+- `--threads`: threads used within one sample's bwa/samtools/spades/blastn steps.
+- `--jobs`: how many samples run at once (only relevant with `--config`).
 
-Total CPU usage is roughly `--jobs * --threads`, and SPAdes assembly is also fairly memory-hungry per concurrent job, so:
+Total CPU usage is roughly `jobs * threads`, so pick values whose product doesn't exceed your machine's core count. For a single sample, just raise `--threads`. For a batch, a moderate number of jobs with a few threads each usually beats either extreme - e.g. on 16 cores, try `--jobs 4 --threads 4` rather than `--jobs 16 --threads 1` or `--jobs 1 --threads 16`. If you see memory pressure from concurrent spades runs, lower `--jobs`.
 
-- For a **single sample**, just raise `--threads` as high as your machine's core count allows.
-- For **many samples**, the fastest wall-clock setup is usually a small number of concurrent jobs each using several threads, rather than one thread per job or one job for everything - e.g. on a 16-core machine, `--jobs 4 --threads 4` will generally beat both `--jobs 16 --threads 1` (too much per-sample overhead and I/O contention) and `--jobs 1 --threads 16` (most of these tools stop scaling well past 4-8 threads, so the extra threads sit idle while samples wait their turn). Start from `jobs * threads ≈ cores`, then adjust `--jobs` down if you see memory pressure from concurrent SPAdes runs.
-- `--assembly`/`--bam` (see "Re-running samples") let you skip the slowest steps (assembly, mapping) entirely on repeat runs.
-- If you only need part of the output, `--mode flanks` or `--mode variants` skips whichever half of the pipeline you don't need (see Modes below).
+Other ways to save time:
+- `--bam`/`--assembly` skip mapping/assembly on repeat runs (see "Re-running samples").
+- `--mode flanks` or `--mode variants` skips whichever half of the pipeline you don't need (see Modes below).
 
 ### Output
 
@@ -127,7 +126,7 @@ The `--mode` option (default `all`) controls which stages of the pipeline run, a
 | `variants` | deletion/BLAST + SNP calling only | flank extraction | Deletions, Structural_variant, SNPs_homozygous, SNPs_heterozygous, Heterozygous_SNP_counts, SNP_variant, Combined_variant (+ `X_Y_presence` if `--show_region` is set) |
 | `flanks` | flank extraction only | assembly, BLAST, SNP calling | Left_flanks, Right_flanks, Left_flank_counts, Right_flank_counts |
 
-Every mode also always includes a `Sample_name` column (from `--outprefix`) as the first column. Use `variants` or `flanks` to skip the half of the pipeline you don't need - `flanks` in particular skips assembly and BLAST entirely, which are usually the slowest steps.
+Every mode includes a `Sample_name` column (from `--outprefix`) as the first column. `flanks` mode skips assembly and BLAST, usually the slowest steps.
 
 ### Advanced usage (all options):
 -  -h, --help:            show this help message and exit

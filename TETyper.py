@@ -39,153 +39,96 @@ class ProfileError(Exception):
 
 class ProfileMatcher:
     def __init__(self, profile_file, nonestring, delim, sep='\t', start_pos=None, end_pos=None):
-        """
-        Initialize ProfileMatcher class with provided parameters.
-        Parameters:
-        - profile_file: Path to the file containing profiles.
-        - nonestring: A string used to represent missing values.
-        - delim: The delimiter used in the profile file.
-        - sep: The separator used to split profile name and profile.
-        - start_pos: Starting position in the file for reading profiles.
-        - end_pos: Ending position in the file for reading profiles.
-        """
-        self.start_pos = start_pos  # Starting position for reading profiles (default: None).
-        self.end_pos = end_pos  # Ending position for reading profiles (default: None).
-        self.sep = sep  # Separator used to split profile name and profile (default: '\t').
-        self.delim = delim  # Delimiter used in the profile file.
-        self.nonestring = nonestring  # String used to represent missing values.
-        self.profile_dict = {}  # Dictionary to store profiles.
+        self.start_pos = start_pos
+        self.end_pos = end_pos
+        self.sep = sep
+        self.delim = delim
+        self.nonestring = nonestring
+        self.profile_dict = {}
         with open(profile_file) as profile_handle:
             for line in profile_handle:
-                if len(line.strip()) > 0:  # Check if the line is not empty.
-                    strippedline = line.rstrip('\n')  # Remove newline character from the end of the line.
+                if len(line.strip()) > 0:  # If a line is only white space, simply ignore it
+                    strippedline = line.rstrip('\n')
                     if self.sep not in strippedline:
                         raise ProfileError('"{0}" does not contain separate columns for name and profile'.format(strippedline))
-                    profile_name, profile = strippedline.split(self.sep, 1)  # Split line into name and profile
+                    profile_name, profile = strippedline.split(self.sep, 1)
                     if profile in self.profile_dict:
                         raise ProfileError('Duplicate entries for profile "{0}"'.format(profile))
                     self.validate_profile(profile)
-                    self.profile_dict[profile] = profile_name  # Add profile and its name to the dictionary
+                    self.profile_dict[profile] = profile_name
 
     def get_profile(self, profile, default=None):
-        """
-        Get the name associated with a profile.
-        Parameters:
-        - profile: The profile to lookup.
-        - default: The default value to return if the profile is not found.
-        Returns:
-        - The name associated with the profile, assuming it is found.
-        """
+        # returns corresponding profile name if there's a match, otherwise None/default
         if profile in self.profile_dict:
             return self.profile_dict[profile]
         return default
 
     def validate_profile(self, profile):
-        """
-        Validate the format of a profile.
-        Placeholder function.
-        """
-        pass  
+        pass
 
 
 class StructProfileMatcher(ProfileMatcher):
     def validate_profile(self, profile):
-        """
-        Validate the format of the structured profile.
-        Parameters:
-        - profile (str): The structured profile to validate.
-        """
         if profile == self.nonestring:
-            return  # Skip validation if the profile is empty
+            return
+        # each element should be: start-end, where start and end are (positive) integers and within range (if specified)
         elements = profile.split(self.delim)
-        prev_start, prev_end = None, None 
+        prev_start, prev_end = None, None
         for element in elements:
             try:
-                start, end = map(int, element.split('-', 1))  # Split element into start and end positions
-            except ValueError: 
+                start, end = map(int, element.split('-', 1))
+            except ValueError:  # covers splitting with inappropriate number of elements and integer conversion
                 raise ProfileError('"{0}" is not a valid range'.format(element))
             if start > end:
                 raise ProfileError('"{0}" is not a valid range'.format(element))
-            # Check if the start and end positions are within the allowable range
             if (self.start_pos is not None and start < self.start_pos) or (self.end_pos is not None and end > self.end_pos):
                 raise ProfileError('"{0}" is not contained within the allowable range of {1}'.format(element, str(self.start_pos) + '-' + str(self.end_pos)))
-            # Check if the elements are ordered by start and ranges are non-adjacent and non-overlapping
+            # elements should be ordered by start and ranges should be non-adjacent and non-overlapping (i.e. only most simplified version is valid)
             if prev_end is not None and start <= prev_end + 1:
                 raise ProfileError('Incorrectly ordered or overlapping ranges: "{0}" and "{1}"'.format(str(prev_start) + '-' + str(prev_end), str(start) + '-' + str(end)))
-            prev_start, prev_end = start, end 
+            prev_start, prev_end = start, end
 
-                                                
+
 class SNPProfileMatcher(ProfileMatcher):
     def validate_profile(self, profile):
-        """
-        Validate the format of the SNP profile.
-        Parameters:
-        - profile (str): The SNP profile to validate.
-        """
         try:
-            var_element_string, N_element_string = profile.split(self.sep)  # Split profile into variable and N-site elements
+            var_element_string, N_element_string = profile.split(self.sep)
         except ValueError:
             raise ProfileError('SNP profile "{0}" does not contain the required two columns'.format(profile))
-        # Validate variable elements
         if var_element_string != self.nonestring:
             var_elements = var_element_string.split(self.delim)
             self.validate_snps(var_elements)
-        # Validate N-site elements
         if N_element_string != self.nonestring:
             N_elements = N_element_string.split(self.delim)
             self.validate_snps(N_elements, Nsite=True)
 
     def validate_snps(self, snps, Nsite=False):
-        """
-        Validate the format of SNPs.
-        Parameters:
-        - snps (list of str): List of SNPs to validate.
-        - Nsite (bool): Indicates whether the SNPs are N-sites (default: False).
-        """
         prev_pos = None
         for snp in snps:
             try:
-                ref, pos, alt = snp[0], int(snp[1:-1]), snp[-1] 
+                ref, pos, alt = snp[0], int(snp[1:-1]), snp[-1]
             except (IndexError, ValueError):
                 raise ProfileError('"{0}" is not a valid snp'.format(snp))
-            # Check if the position is within range
             if pos < self.start_pos or pos > self.end_pos:
                 raise ProfileError('Error parsing SNP "{0}": Position "{1}" is not contained within the allowable range of {2}'.format(snp, pos, str(self.start_pos) + '-' + str(self.end_pos)))
             bases = ['A','C','G','T']
-            # Check if the reference base is valid
             if ref not in bases:
                 raise ProfileError('Error parsing SNP "{0}": "{1}" is not a valid reference base. Allowed values are: A,C,G,T'.format(snp, ref))
-            # Check if the alternate base is valid for variable sites
             if not Nsite and alt not in bases:
                 raise ProfileError('Error parsing SNP "{0}": "{1}" is not a valid homozygous SNP call. Allowed values are: A,C,G,T'.format(snp, alt))
-            # Check if the alternate base is valid for N-sites
             if Nsite and alt not in ['M','R','W','S','Y','K']:
                 raise ProfileError('Error parsing SNP "{0}": "{1}" is not a valid heterozygous SNP call. Allowed values are: M,R,W,S,Y,K'.format(snp, alt))
-            # Check if SNPs are ordered by position
             if prev_pos is not None and pos <= prev_pos:
                 raise ProfileError('Incorrect ordering for "{0}" and "{1}". SNPs should be ordered by position.'.format(prev_pos, pos))
-            prev_pos = pos 
+            prev_pos = pos
 
 class TETyper:
-    """
-    Class for TETyper analysis.
-    Attributes:
-    - DELIM (str): Delimiter used in TETyper.
-    - NONESTRING (str): String representing "none".
-    - UNKSTRING (str): String representing "unknown".
-    """
 
     DELIM = '|'
     NONESTRING = 'none'
     UNKSTRING = 'unknown'
 
     def __init__(self, args):
-        """
-        Initialize TETyper with the given arguments and check for validity.
-        Parameters:
-        - args: Command-line arguments parsed by argparse.
-        """
-        # Set up logging
         loglevels = {1:logging.ERROR, 2:logging.WARNING, 3:logging.INFO, 4:logging.DEBUG}
         logger = logging.getLogger()
         logger.setLevel(logging.DEBUG)
@@ -222,18 +165,17 @@ class TETyper:
         self.ref_contig, self.ref_end = list(contigs.items())[0]
         logging.info('Successfully read in reference of length {0}'.format(self.ref_end))
 
-        # If blast database is explicitly specified, make sure it actually exists
+        # if blast database is explicitly specified, make sure it actually exists
         if args.refdb:
             self.refdb = args.refdb
             self.check_file(self.refdb + '.nin')
-        # Otherwise check for blast database with default naming and create one if it doesn't already exist
+        # otherwise check for blast database with default naming and create one if it doesn't already exist
         else:
             self.refdb = self.ref
             if not os.path.isfile(self.refdb + '.nin'):
                 logging.info('Blast database not found. Creating database automatically.')
                 self.run_external_call([['makeblastdb', '-dbtype', 'nucl', '-in', self.ref]], 'blast database creation')
 
-        # Always use .bam file if provided.
         if args.bam is not None:
             self.bam = args.bam
             self.bam_provided = True
@@ -282,27 +224,16 @@ class TETyper:
 
 
     def exitonerror(self, errorstring):
-        """
-        Log an error message and exit the program.
-        Parameters:
-        - errorstring (str): The error message to log.
-        """
         logging.error(errorstring)
         self.cleanup()
         sys.exit(1)
 
     def cleanup(self):
-        """
-        Close the log file and shut down the logging.
-        """
         if self.loghandle is not None:
             self.loghandle.close()
         logging.shutdown()
 
     def fq_cleanup(self):
-        """
-        Clean up fq files generated during mapping.
-        """
         fq1 = self.outprefix + '_mappedreads_1.fq'
         fq2 = self.outprefix + '_mappedreads_2.fq'
         if os.path.isfile(fq1):
@@ -311,15 +242,6 @@ class TETyper:
             os.remove(fq2)
 
     def check_file(self, filename, checkexist='error', checkempty='warning'):
-        """
-        Check the existence and/or emptiness of a file.
-        Parameters:
-        - filename (str): The name of the file to check.
-        - checkexist (str): Specifies what to do if the file does not exist ('error' or 'warning'). Default is 'error'.
-        - checkempty (str): Specifies what to do if the file is empty ('error' or 'warning'). Default is 'warning'.
-        Returns:
-        - bool: True if the file exists and is not empty, False otherwise.
-        """
         if checkexist is not None and not os.path.isfile(filename):
             existmsg = 'File "{0}" does not exist'.format(filename)
             if checkexist == 'warning':
@@ -342,46 +264,28 @@ class TETyper:
 
 
     def check_return_code(self, program_name, retcode):
-        """
-        Check the return code of some external program.
-        Parameters:
-        - program_name (str): The name of the external program.
-        - retcode (int): The return code of the program.
-        """
         if retcode != 0:
             self.exitonerror('Command {0} returned non-zero exit status {1}'.format(program_name, retcode))
 
 
-
     def run_external_call(self, proc_args, stage_name, outfile=None):
-        """
-        Run an external command.
-        Parameters:
-        - proc_args (list of list): List of command arguments.
-        - stage_name (str): Name of the stage for logging purposes.
-        - outfile (str): Name of the output file. Default is None.
-        """
         logging.debug('Running {0} using the following command: "{1}"'.format(stage_name, ' | '.join([' '.join(arglist) for arglist in proc_args])))
         try:
             procs = []
-            # Execute the command(s)
             if len(proc_args) == 1:
                 procs.append(Popen(proc_args[0], stdout=self.loghandle, stderr=STDOUT))
             else:
-                # Handle multiple commands piped together
-                procs.append(Popen(proc_args[0], stdout=PIPE, stderr=self.loghandle))  # First in pipe
-                for args in proc_args[1:-1]:  # Everything in the middle
+                procs.append(Popen(proc_args[0], stdout=PIPE, stderr=self.loghandle))  # first in pipe
+                for args in proc_args[1:-1]:  # everything in the middle
                     procs.append(Popen(args, stdin=procs[-1].stdout, stdout=PIPE, stderr=self.loghandle))
-                procs.append(Popen(proc_args[-1], stdin=procs[-1].stdout, stdout=self.loghandle, stderr=STDOUT))  # Last in pipe
+                procs.append(Popen(proc_args[-1], stdin=procs[-1].stdout, stdout=self.loghandle, stderr=STDOUT))  # last in pipe
                 for proc in procs[:-1]:
                     proc.stdout.close()
-            # Wait for each command to complete and check the return code
             for proc,args in zip(procs[::-1], proc_args[::-1]):
                 proc.wait()
                 progname = args[0] if args[1][0] == '-' else ' '.join(args[0:2])
                 self.check_return_code(progname, proc.returncode)
         except OSError:
-            # Handle errors related to executing the command
             proglist = list(set([args[0] for args in proc_args]))
             if len(proglist) == 1:
                 progs = proglist[0] + ' is'
@@ -393,9 +297,6 @@ class TETyper:
         logging.debug('{0} completed successfully. {1}'.format(stage_name[:1].upper() + stage_name[1:], outputmessage))
 
     def do_map(self):
-        """
-        Perform mapping using BWA-MEM unless bam file already present.
-        """
         if self.bam_provided:
             logging.info('Skipping mapping step and using bam file provided: ' + self.bam)
             self.check_file(self.bam)
@@ -413,9 +314,6 @@ class TETyper:
         self.run_external_call([bwa_mem_args, samtools_view_args, samtools_sort_args], 'mapping', self.bam)
 
     def do_assembly(self):
-        """
-        De novo assembly if no assembly file provided.
-        """
         if self.assembly_provided:
             logging.info('Skipping assembly step and using assembly file provided: {0}'.format(self.assembly))
             return
@@ -442,9 +340,6 @@ class TETyper:
 
 
     def do_blast(self):
-        """
-        Perform a BLAST search of the assembly against reference.
-        """
         if not self.check_file(self.assembly, checkexist='warning'):
             logging.warning('Assuming zero length assembly and proceeding anyway')
             logging.info('Skipping blast step')
@@ -457,20 +352,17 @@ class TETyper:
 
 
     def parse_blast(self):
-        """
-        Parse the BLAST output file to identify deletion regions and determine if a specific region is present.
-        """
-        hitranges = []  # List of tuples containing ranges covered by blast hits
+        hitranges = []  # list of tuples containing ranges covered by blast hits
         if self.blastfile is not None:
             logging.debug('Parsing blast output...')
             with open(self.blastfile) as blastfilehandle:
                 for blasthit in blastfilehandle:
                     blasthitfields = blasthit.strip().split()
                     sstart, send = int(blasthitfields[8]), int(blasthitfields[9])
-                    hitranges.append((min(sstart, send), max(sstart, send))) 
-        hitranges.sort()  # Sort by hit start position
+                    hitranges.append((min(sstart, send), max(sstart, send)))
+        hitranges.sort()  # sort by hit start position
 
-        # Merge hit overlaps
+        # merge hit overlaps
         mergedhitranges = []
         startpos, endpos = None, None
         for (currstart, currend) in hitranges:
@@ -486,7 +378,6 @@ class TETyper:
         if startpos is not None:
             mergedhitranges.append((startpos, endpos))
 
-        # Identify deletions
         self.deleted_regions = []
         del_start, del_end = self.ref_start, self.ref_end
         for (startpos, endpos) in mergedhitranges:
@@ -508,41 +399,29 @@ class TETyper:
                 logging.info('Status of region {0}: absent'.format(self.show_region))
 
 
-
     def get_struct_profile(self):
-        """
-        Get the structural variant profile based on deletion regions identified.
-        """
         self.struct_profile = self.UNKSTRING
         if self.struct_profiles:
             logging.debug('Structural variant profile file provided. Searching for a matching profile...')
-            self.check_file(self.struct_profiles)  # Check if the structural profile file exists
+            self.check_file(self.struct_profiles)
             try:
                 struct_matcher = StructProfileMatcher(self.struct_profiles, delim=self.DELIM, nonestring=self.NONESTRING, start_pos=self.ref_start, end_pos=self.ref_end)
             except IOError:
                 self.exitonerror('IOError reading structural profile file {0}'.format(self.struct_profiles))
             except ProfileError as e:
                 self.exitonerror('Error reading structural profile file: {0}'.format(e.value))
-            # Get the structural profile
             self.struct_profile = struct_matcher.get_profile(self.deletion_string, default=self.UNKSTRING)
             logging.info('Structural variant profile identified: {0}'.format(self.struct_profile))
 
 
     def call_struct(self):
-        """
-        Find structural variationsa and deletions.
-        """
         self.do_assembly()
         self.do_blast()
         self.parse_blast()
         self.get_struct_profile()
-    
 
 
     def generate_vcf(self):
-        """
-        VCF file generations (bcftools mpileup > bcftools call) and validation.
-        """
         self.snpfile = self.outprefix + '.vcf'
         bcftools_mpileup_args = ['bcftools', 'mpileup', '-AIf', self.ref, self.bam]
         bcftools_call_args = ['bcftools', 'call', '-mv', '-o', self.snpfile]
@@ -551,13 +430,6 @@ class TETyper:
 
 
     def get_ambiguous_code(self, bases):
-        """
-        Get the ambiguous nucleotide code based on the provided bases.
-        Parameters:
-        - bases (list): List of nucleotide bases.
-        Returns:
-        - str: Ambiguous nucleotide code.
-        """
         sorted_bases = sorted(map(str,bases))
         if sorted_bases == ['A','C']:
             return 'M'
@@ -584,61 +456,42 @@ class TETyper:
 
 
     def list2delimsep(self, inlist):
-        """
-        Convert a list of elements to a string with elements separated by a delimiter ('|').
-        Parameters:
-        - inlist (list): List of elements to be joined.
-        Returns:
-        - str: String with elements separated by a delimiter ('|').
-        """
         if len(inlist) == 0:
             return self.NONESTRING
         return self.DELIM.join(map(str, inlist))
 
 
-
     def parse_vcf(self):
-        """
-        Parse the VCF (Variant Call Format) file generated from SNP calling.
-        Identify homozygous/heterozygous SNPs.
-        """
         logging.debug('Parsing SNP calling output...')
         varsites = []
         Nsites = []
         Nsite_counts = []
         del_varsites = []
         del_Nsites = []
-        
         with open(self.snpfile) as snpfilehandle:
             vcf_reader = vcf.Reader(snpfilehandle)
             for record in vcf_reader:
+                # use this record if it's not in a deleted region and there's at least one forward and one reverse read supporting the alternative call. If it's in a deleted region, just report in log file
                 if record.INFO['DP4'][2] > 0 and record.INFO['DP4'][3] > 0:
-                    # Check if the SNP call is within a deleted region
                     if len([(start, end) for (start, end) in self.deleted_regions if record.POS >= start and record.POS <= end]) == 0:
-                        # Handle homozygous SNP calls
                         if record.samples[0]['GT'] == '1/1':
                             varsites.append('{0}{1}{2}'.format(record.REF, record.POS, record.ALT[0]))
-                        # Handle heterozygous SNP calls
                         else:
                             Nsites.append('{0}{1}{2}'.format(record.REF, record.POS, self.get_ambiguous_code([record.REF, record.ALT[0]])))
                             refcounts = record.INFO['DP4'][0] + record.INFO['DP4'][1]
                             altcounts = record.INFO['DP4'][2] + record.INFO['DP4'][3]
                             Nsite_counts.append('{0}{1},{2}{3}'.format(record.REF, refcounts, record.ALT[0], altcounts))
                     else:
-                        # Handle SNP calls within deleted regions
                         if record.samples[0]['GT'] == '1/1':
                             del_varsites.append('{0}{1}{2}'.format(record.REF, record.POS, record.ALT[0]))
                         else:
                             del_Nsites.append('{0}{1}{2}'.format(record.REF, record.POS, self.get_ambiguous_code([record.REF, record.ALT[0]])))
 
-        # Convert SNP lists to delimited strings
         self.varsite_string = self.DELIM.join(varsites) if len(varsites) > 0 else self.NONESTRING
         self.Nsite_string = self.DELIM.join(Nsites) if len(Nsites) > 0 else self.NONESTRING
         self.Nsite_count_string = self.list2delimsep(Nsite_counts)
-        
         logging.info('Homozygous SNPs identified: {0}'.format(self.varsite_string))
         logging.info('Heterozygous SNPs identified: {0}'.format(self.Nsite_string))
-
         if len(del_varsites) > 0:
             logging.info('Homozygous SNPs identified in deleted regions (not reported in summary file): {0}'.format(self.DELIM.join(del_varsites)))
         if len(del_Nsites) > 0:
@@ -646,9 +499,6 @@ class TETyper:
 
 
     def get_snp_profile(self):
-        """
-        Get the SNP profile from prev identified homozygous and heterozygous SNPs.
-        """
         self.snp_profile = self.UNKSTRING
         if self.snp_profiles:
             logging.debug('SNP profile file provided. Searching for a matching profile...')
@@ -664,11 +514,8 @@ class TETyper:
 
 
     def call_snps(self):
-        """
-        Perform SNP calling (generating and parsing VCF file and getting SNP profile).
-        """
         self.generate_vcf()
-        self.parse_vcf() 
+        self.parse_vcf()
         self.get_snp_profile()
 
 
@@ -721,9 +568,6 @@ class TETyper:
 
 
     def write_output(self):
-        """
-        Write generated data to summary file. the number of columns depends on chosen mode.
-        """
         if self.mode == "all":
             header = ['Sample_name','Deletions', 'Structural_variant', 'SNPs_homozygous', 'SNPs_heterozygous', 'Heterozygous_SNP_counts', 'SNP_variant', 'Combined_variant', 'Left_flanks', 'Right_flanks', 'Left_flank_counts', 'Right_flank_counts']
             contents = [self.outprefix, self.deletion_string, self.struct_profile, self.varsite_string, self.Nsite_string, self.Nsite_count_string, self.snp_profile, self.struct_profile + '-' + self.snp_profile, self.lflanks, self.rflanks, self.lcounts, self.rcounts]
@@ -746,9 +590,7 @@ class TETyper:
         logging.info('Final output written to: {0}'.format(outfile))
 
     def clean_spades(self):
-        """
-        Delete all files in spades folder except contigs.fasta and log file.
-        """
+        # delete all files in spades folder except contigs.fasta and log file
         if not self.keep_spades:
             sp_folder = self.outprefix + '_spades'
             for dirpath, dirnames, filenames in os.walk('./'+ sp_folder, topdown = False):
@@ -765,9 +607,6 @@ class TETyper:
                        logging.warning('Could not remove directory {}'.format(os.path.join(dirpath, dirname)))
 
     def run_typing(self):
-        """
-        Find deletions/SNV and/or extract flanks, depending on chosen mode.  
-        """
         self.do_map()
         if self.mode != "flanks":
             self.call_struct()
@@ -779,9 +618,6 @@ class TETyper:
 
 
 def get_argsparser():
-    """
-    Parse (and describe) arguments for TETyper pipeline
-    """
     parser = argparse.ArgumentParser(description = 'TETyper version {0}. Given a set of input reads and a reference, TETyper performs typing to identify: 1. deletions and SNP variation relative to the reference, and 2. the immediate (up to ~20bp) sequence(s) flanking the reference.'.format(VERSION))
     parser.add_argument('--config', help = 'Tab-separated file listing multiple samples to run, with header "outprefix\\tfq1\\tfq2\\tbam" (leave fq1/fq2/bam blank for whichever inputs are not used for a given sample). Runs all listed samples, using --jobs to control how many run at once. Cannot be combined with --outprefix/--fq1/--fq2/--bam, which are for running a single sample directly.')
     parser.add_argument('--outprefix', help = 'Prefix to use for output files. Required unless --config is given.')
@@ -810,13 +646,8 @@ def get_argsparser():
     return(parser)
 
 def format_args(args):
-    """
-    Build one args object per sample.
-    If --config is given, read one sample per line from that tab-separated file
-    (columns: outprefix, fq1, fq2, bam - leave a column blank for whichever
-    inputs aren't used for a given sample). Otherwise, treat this as a single
-    sample described directly by --outprefix/--fq1/--fq2/--bam.
-    """
+    # build one args object per sample: one per line of --config if given, otherwise a single
+    # sample taken directly from --outprefix/--fq1/--fq2/--bam
     if args.config is None:
         if not args.outprefix:
             print('Either --config, or --outprefix (with --fq1/--fq2 or --bam), must be given.')
