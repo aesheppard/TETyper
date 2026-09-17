@@ -14,15 +14,14 @@ Requirements:
 - python 3 (<3.11) (with Biopython, pysam, pyvcf3)
 - [samtools, bcftools](http://www.htslib.org/) (tested on version 1.18)
 - [bwa](http://bio-bwa.sourceforge.net/) (tested on version 0.7.17)
-- [spades](http://cab.spbu.ru/software/spades/) (tested on version 3.11.1)
+- [spades](http://cab.spbu.ru/software/spades/) (tested on version 3.15.5)
 - [BLAST+](https://www.ncbi.nlm.nih.gov/books/NBK279690/) (tested on version 2.15.0)
-- [snakemake](https://snakemake.github.io/) (tested on version 7.32.4)
 
-*Still to be implemented*:
-TETyper is conda-installable, enabling automatic installation of python dependencies:
+An `environment.yml` is provided with all of the above pinned to the tested versions. Create and activate the environment with:
 
 ```
-conda install TETyper
+conda env create -f environment.yml
+conda activate TETyper_env
 ```
 
 To check whether TETyper is running correctly, a small test dataset has been provided. If the following command is executed:
@@ -44,33 +43,52 @@ Note that the exact values in the Left_flank_counts and Right_flank_counts colum
 
 ### Basic usage
 
-When running one sample, you can run TETyper directly using this command:
+#### Running a single sample
 
-'''
+```
 TETyper.py --ref REFERENCE.fasta --fq1 FORWARD_READS.fq.gz --fq2 REVERSE_READS.fq.gz --outprefix OUTPREFIX --flank_len FLANK_LENGTH
-'''
-If you want to run multiple samples, TETyper can be run via snakemake. For example, the test dataset can be run with:
-''' 
-snakemake --cores 1
-'''
-Parameters to run the test dataset are already provided in the config.json file.
-Parameters can be modified by directly editing the **config.json** file. If a parameter is not needed, write **null**.
-You can also provide a tab separated file called **sample_data.txt** (e.g. exported from Excel) in the following format for some of the parameters:
+```
 
-| outprefix | fq1                      | fq2                      | bam            |
-| --------- | ------------------------ | ------------------------ | -------------- |
-| sample_1  | sample_1_fwd_reads.fq.gz | sample_1_rev_reads.fq.gz |                |
-| sample_2  | sample_2_fwd_reads.fq.gz | sample_2_rev_reads.fq.gz | sample_2.bam   |
-| sample_3  |                          |                          | sample_3.bam   |
-
-Please note that if the sample_data.txt file is present, it will be used. Rename or delete it if you would like to use arguments from config.json.
-If you are new to TETyper, ignore the bam column (but still include it in the header line). See Advanced Usage below for an explanation of how to use it. 
-If both bam and fq files are provided, the bam file will be used.
+For example, to run the provided test dataset:
 
 ```
-snakemake --cores *n*
+TETyper.py --ref Tn4401b-1.fasta --fq1 SRR1582895_sm_1.fq.gz --fq2 SRR1582895_sm_2.fq.gz --outprefix test --flank_len 5 --struct_profiles struct_profiles.txt --snp_profiles snp_profiles.txt --show_region 7202-8083
 ```
-n is the number of cores you want to use. For example, *snakemake --cores 4* uses 4 cores.
+
+#### Running multiple samples
+
+To type several samples in one run, provide a tab-separated `--config` file instead of `--outprefix`/`--fq1`/`--fq2`/`--bam`. The file needs a header row and one row per sample:
+
+```
+outprefix	fq1	fq2	bam
+sample_1	sample_1_fwd_reads.fq.gz	sample_1_rev_reads.fq.gz	
+sample_2	sample_2_fwd_reads.fq.gz	sample_2_rev_reads.fq.gz	
+sample_3			sample_3.bam
+```
+
+- Leave `fq1`/`fq2` blank (but still tab-separated) for a sample supplied as a `--bam` instead, and vice versa. If you're new to TETyper, ignore the `bam` column entirely (just keep it blank) - see "Re-running samples" below for when it's useful.
+- If both `bam` and `fq1`/`fq2` are given for the same sample, the `bam` file is used and mapping is skipped for that sample.
+- All other options (`--ref`, `--flank_len`, `--struct_profiles`, etc.) are shared across every sample in the config file and are given on the command line as usual, e.g.:
+
+```
+TETyper.py --config sample_data.txt --ref Tn4401b-1.fasta --flank_len 5 --struct_profiles struct_profiles.txt --snp_profiles snp_profiles.txt --show_region 7202-8083 --jobs 4
+```
+
+This produces one `OUTPREFIX_summary.txt` per sample plus a combined `all_summary.txt` containing every sample's row (see Output below). A ready-to-use example, matching the provided test dataset, is in `sample_data.txt`.
+
+#### Making it as fast as possible
+
+Each sample's mapping/assembly/BLAST/variant-calling steps are single-pipeline and mostly CPU-bound, so there are two independent ways to add parallelism, and they multiply together:
+
+- **`--threads N`**: threads used *within* one sample's `bwa`/`samtools`/`spades`/`blastn` steps.
+- **`--jobs N`** (only relevant with `--config`): how many samples are processed *concurrently*.
+
+Total CPU usage is roughly `--jobs * --threads`, and SPAdes assembly is also fairly memory-hungry per concurrent job, so:
+
+- For a **single sample**, just raise `--threads` as high as your machine's core count allows.
+- For **many samples**, the fastest wall-clock setup is usually a small number of concurrent jobs each using several threads, rather than one thread per job or one job for everything - e.g. on a 16-core machine, `--jobs 4 --threads 4` will generally beat both `--jobs 16 --threads 1` (too much per-sample overhead and I/O contention) and `--jobs 1 --threads 16` (most of these tools stop scaling well past 4-8 threads, so the extra threads sit idle while samples wait their turn). Start from `jobs * threads ≈ cores`, then adjust `--jobs` down if you see memory pressure from concurrent SPAdes runs.
+- `--assembly`/`--bam` (see "Re-running samples") let you skip the slowest steps (assembly, mapping) entirely on repeat runs.
+- If you only need part of the output, `--mode flanks` or `--mode variants` skips whichever half of the pipeline you don't need (see Modes below).
 
 ### Output
 
@@ -79,13 +97,13 @@ TETyper produces the following output files:
 - **OUTPREFIX.log**: Log file containing details of individual steps performed, as well as any errors
 - **OUTPREFIX.bam**: Reads mapped to REFERENCE.bam
 - **OUTPREFIX_mappedreads_1.fq, OUTPREFIX_mappedreads_2.fq**: Mapped reads converted to fastq format
-- **OUTPREFIX_spades**: Directory containing spades assembly from mapped reads. By default, only contigs.fasta and spades.log are kept. See *--keep-spades* option below to keep all files produced by spades.
+- **OUTPREFIX_spades**: Directory containing spades assembly from mapped reads. By default, only contigs.fasta and spades.log are kept. See *--keep_spades* option below to keep all files produced by spades.
 - **OUTPREFIX_blast.txt**: Tabular blastn results comparing the spades assembly to REFERENCE.fasta
 - **OUTPREFIX.vcf**: SNVs identified
 - **all_summary.txt**: Summary of all results generated in various **OUTPREFIX_summary.txt** files.
 
 
-The summary file contains up columns when running mode "all". These are:
+The summary file contains up to 12 columns when running mode "all" (see Modes below for other modes). These are:
 - **Deletions**: A list of sequence ranges corresponding to regions of the reference classified as deletions for this sample, or "none" for no deletions.
 - **Structural_variant**: If --struct_profiles is specified and the pattern of deletions above corresponds to one of these profiles, then the profile name is given, otherwise "unknown".
 - **SNPs_homozygous**: A list of homozygous SNPs identified, or "none".
@@ -99,12 +117,30 @@ The summary file contains up columns when running mode "all". These are:
 - **Right_flank_counts**: The number of high quality reads supporting each of the right flanking sequences.
 - **X_Y_presence**: If --show_region is specified as --show_region X-Y, this column shows 1 if the entirety of that region is classified as present (i.e. no overlap with deleted regions), or 0 otherwise. If --show_region is unspecified, this column is omitted.
 
-When running mode "variants", only columns 1-7 are produced. When running mode "flanks", only columns 8-11 are produced. Column 12 is present in mode "all" and "variants" if the option *--show-region* (see Advanced usage for more information) is enabled.
+### Modes
+
+The `--mode` option (default `all`) controls which stages of the pipeline run, and therefore which columns appear in the summary file:
+
+| `--mode` | Runs | Skips | Summary columns |
+| --- | --- | --- | --- |
+| `all` (default) | everything | - | Deletions, Structural_variant, SNPs_homozygous, SNPs_heterozygous, Heterozygous_SNP_counts, SNP_variant, Combined_variant, Left_flanks, Right_flanks, Left_flank_counts, Right_flank_counts (+ `X_Y_presence` if `--show_region` is set) |
+| `variants` | deletion/BLAST + SNP calling only | flank extraction | Deletions, Structural_variant, SNPs_homozygous, SNPs_heterozygous, Heterozygous_SNP_counts, SNP_variant, Combined_variant (+ `X_Y_presence` if `--show_region` is set) |
+| `flanks` | flank extraction only | assembly, BLAST, SNP calling | Left_flanks, Right_flanks, Left_flank_counts, Right_flank_counts |
+
+Every mode also always includes a `Sample_name` column (from `--outprefix`) as the first column. Use `variants` or `flanks` to skip the half of the pipeline you don't need - `flanks` in particular skips assembly and BLAST entirely, which are usually the slowest steps.
 
 ### Advanced usage (all options):
 -  -h, --help:            show this help message and exit
+-  --config CONFIG:      Tab-separated file listing multiple samples to run
+                        (see "Running multiple samples" above). Cannot be
+                        combined with --outprefix/--fq1/--fq2/--bam, which are
+                        for running a single sample directly.
+-  --jobs JOBS:           Number of samples to process concurrently when using
+                        --config (see "Making it as fast as possible" above).
+                        Default: 1
 -  --outprefix OUTPREFIX:
-                        Prefix to use for output files. Required.
+                        Prefix to use for output files. Required unless
+                        --config is given.
 -  --ref REF:             Reference sequence in fasta format. If not already
                         indexed with bwa, this will be created automatically.
                         A blast database is also required, again this will be
@@ -182,10 +218,13 @@ When running mode "variants", only columns 1-7 are produced. When running mode "
                         log file named according to the given output prefix.
                         If it exists then the pipeline exits without modifying
                         any files.
--   --keep-spades:      Keeps spades folder intact. Default: off (spades.log 
-                        and params.txt are always preserved.)
+-   --keep_spades:      Keeps spades folder intact. Default: off (only
+                        contigs.fasta and spades.log are preserved.)
 -   --mode:             Run only variants (deletions, homo/heterozygous SNVs), only flank extraction, or whole
-                        pipeline. Options: "all", "flanks", "variants". Default: "all".                
+                        pipeline. Options: "all", "flanks", "variants". Default: "all".
+-   --tidy:             When used with --config, move each sample's output,
+                        temp and log files into a subdirectory named after
+                        its outprefix once all samples have finished.
 
 
 ### A note on the profile files
@@ -204,6 +243,9 @@ TETyper.py --ref Tn4401b-1.fasta --fq1 FORWARD_READS.fq.gz --fq2 REVERSE_READS.f
 
 TETyper provides options for specifying the mapped bam file and/or assembly file in order to save processing time if the same samples are rerun with different parameters. For example, newly discovered profiles can be manually appended to the profile files. TETyper can then be rerun with the modified profile files, without redoing all the processing steps, by specifiying the mapped bam file and spades assembly as parameters instead of the original reads. E.g.:
 
+```
+TETyper.py --ref Tn4401b-1.fasta --outprefix RERUN --bam OUTPREFIX.bam --assembly OUTPREFIX_spades/contigs.fasta --flank_len FLANK_LENGTH --struct_profiles STRUCT_PROFILES_MODIFIED.txt --snp_profiles SNP_PROFILES_MODIFIED.txt --show_region 7202-8083
+```
 
 The --bam and --assembly options can also be useful for re-running samples with different parameters for flanking sequence extraction (e.g. a different flank length).
 
@@ -211,19 +253,7 @@ The --bam and --assembly options can also be useful for re-running samples with 
 ### Changes in version 1.2
 - Removed support for reverse/forward interleaved fq files.
 - Updated dependencies to the latest versions (where possible).
-- Added options for running variant calling (deletions, homo/heterozygous SNVs) and flank extraction separately.
-- Implemented cleanup of files in the spades folder (with the option to retain them).
-- Introduced ability to run multiple samples concurrently using Snakemake.
-- Included a summary file encompassing all samples for easier processing.
-
-## A note on spades
-Before you can run TETyper, you must execute the following command one time:
-```
-source spades_corrector.sh
-```
- However, you can also do the following things manually if you encounter any errors:
-- Find the folder where your base environment is located by typing
-```conda env list ``` (the path next to the environment)
-- Open *<PATH>/share/spades-3.11.1*/share/spades/pyyaml3*
-- In line 126, change *if not isinstance(key, collections.Hashable)* to *if not isinstance(key, collections.abc.Hashable):* and save your changes.
-See https://github.com/ablab/spades/issues/873 for more information.
+- Added options for running variant calling (deletions, homo/heterozygous SNVs) and flank extraction separately (`--mode`).
+- Implemented cleanup of files in the spades folder (with the `--keep_spades` option to retain them).
+- Added the ability to run multiple samples in one invocation via `--config`, with `--jobs` controlling how many run concurrently.
+- Included a summary file (`all_summary.txt`) encompassing all samples for easier processing, with `--tidy` to file each sample's outputs into its own subdirectory.

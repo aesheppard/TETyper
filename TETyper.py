@@ -234,12 +234,12 @@ class TETyper:
                 self.run_external_call([['makeblastdb', '-dbtype', 'nucl', '-in', self.ref]], 'blast database creation')
 
         # Always use .bam file if provided.
-        if args.bam != 'None':
+        if args.bam is not None:
             self.bam = args.bam
             self.bam_provided = True
         else:
             self.fq_files = [fq for fq in [args.fq1, args.fq2] if fq is not None]
-            if not ((len(self.fq_files) == 2 and args.fq1 and args.fq2) or (len(self.fq_files) == 1)):
+            if len(self.fq_files) != 2:
                 self.exitonerror('Invalid input. Exactly one of the following must be provided: (--fq1 AND --fq2) OR --bam')
             self.bam_provided = False
 
@@ -263,6 +263,7 @@ class TETyper:
         self.keep_spades = args.keep_spades
         self.mode = args.mode
         self.tidy = args.tidy
+        self.spades_params = args.spades_params
 
         if args.show_region:
             self.show_region = args.show_region
@@ -433,7 +434,7 @@ class TETyper:
 
         # Run assembly
         spadesdir = self.outprefix + '_spades'
-        spades_args = ['spades.py', '-t', str(self.threads), '-o', spadesdir] + fq_args + args.spades_params.split()
+        spades_args = ['spades.py', '-t', str(self.threads), '-o', spadesdir] + fq_args + self.spades_params.split()
         self.run_external_call([spades_args], 'spades assembly', spadesdir + '/')
         self.assembly = spadesdir + '/contigs.fasta'
         self.fq_cleanup()
@@ -782,11 +783,12 @@ def get_argsparser():
     Parse (and describe) arguments for TETyper pipeline
     """
     parser = argparse.ArgumentParser(description = 'TETyper version {0}. Given a set of input reads and a reference, TETyper performs typing to identify: 1. deletions and SNP variation relative to the reference, and 2. the immediate (up to ~20bp) sequence(s) flanking the reference.'.format(VERSION))
-    parser.add_argument('--config', required = True)
-    parser.add_argument('--outprefix')
-    parser.add_argument('--fq1')
-    parser.add_argument('--fq2')
-    parser.add_argument('--bam')
+    parser.add_argument('--config', help = 'Tab-separated file listing multiple samples to run, with header "outprefix\\tfq1\\tfq2\\tbam" (leave fq1/fq2/bam blank for whichever inputs are not used for a given sample). Runs all listed samples, using --jobs to control how many run at once. Cannot be combined with --outprefix/--fq1/--fq2/--bam, which are for running a single sample directly.')
+    parser.add_argument('--outprefix', help = 'Prefix to use for output files. Required unless --config is given.')
+    parser.add_argument('--fq1', help = 'Forward reads. Can be gzipped.')
+    parser.add_argument('--fq2', help = 'Reverse reads. Can be gzipped.')
+    parser.add_argument('--bam', help = 'Bam file containing reads mapped to the given reference, instead of supplying --fq1/--fq2.')
+    parser.add_argument('--jobs', help = "Number of samples to process concurrently when using --config. Each job uses --threads threads, so total CPU usage is roughly jobs * threads - keep that within your machine's core count. Default: 1", type = int, default = 1)
     parser.add_argument('--ref', help = 'Reference sequence in fasta format. If not already indexed with bwa, this will be created automatically. A blast database is also required, again this will be created automatically if it does not already exist. Required.', required = True)
     parser.add_argument('--refdb', help = 'Blast database corresponding to reference file (this argument is only needed if the blast database was created with a different name).')
     parser.add_argument('--assembly', help = 'Use this assembly (fasta format) for detecting structural variants instead of generating a new one. This option saves time if an assembly is already available.')
@@ -808,15 +810,32 @@ def get_argsparser():
     return(parser)
 
 def format_args(args):
+    """
+    Build one args object per sample.
+    If --config is given, read one sample per line from that tab-separated file
+    (columns: outprefix, fq1, fq2, bam - leave a column blank for whichever
+    inputs aren't used for a given sample). Otherwise, treat this as a single
+    sample described directly by --outprefix/--fq1/--fq2/--bam.
+    """
+    if args.config is None:
+        if not args.outprefix:
+            print('Either --config, or --outprefix (with --fq1/--fq2 or --bam), must be given.')
+            sys.exit(1)
+        return [args], [args.outprefix]
+
     if not os.path.isfile(args.config):
-        print("Config file could not be found.")
+        print('Config file could not be found.')
         sys.exit(1)
     all_args = []
     outprefixes = []
     with open(args.config, 'r') as f:
         for line in islice(f, 1, None):
             line = line.strip()
-            words = line.split("\t")
+            if not line:
+                continue
+            words = [word.strip() for word in line.split('\t')]
+            words += [''] * (4 - len(words))  # pad in case trailing blank columns were omitted
+            words = [word if word not in ('', 'None') else None for word in words]  # blank or literal "None" both mean "not provided"
             args_cp = copy.copy(args)
             args_cp.outprefix = words[0]
             args_cp.fq1 = words[1]
@@ -824,8 +843,7 @@ def format_args(args):
             args_cp.bam = words[3]
             all_args.append(args_cp)
             outprefixes.append(args_cp.outprefix)
-    f.close()
-    return all_args,outprefixes
+    return all_args, outprefixes
 
 def process_fun(args):
     new_typer = TETyper(args)
@@ -870,14 +888,13 @@ def tidy_dir(names):
 if __name__ == '__main__':
     parser = get_argsparser()
     args = parser.parse_args()
-    user_args,outprefixes = format_args(args)
-    procs = []
-    for arg in user_args:
-        proc = multiprocessing.Process(target=process_fun,args=(arg,))
-        procs.append(proc)
-        proc.start()
-    for proc in procs:
-        proc.join()
+    if args.jobs <= 0:
+        print('--jobs must be a positive integer.')
+        sys.exit(1)
+    user_args, outprefixes = format_args(args)
+    jobs = min(args.jobs, len(user_args))
+    with multiprocessing.Pool(processes=jobs) as pool:
+        pool.map(process_fun, user_args)
     create_summary(outprefixes)
     if args.tidy:
         tidy_dir(outprefixes)
