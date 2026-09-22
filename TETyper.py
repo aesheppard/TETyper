@@ -136,6 +136,7 @@ class TETyper:
         stderrhandler.setLevel(loglevels[args.verbosity])
         stderrhandler.setFormatter(logging.Formatter('%(levelname)s: %(message)s'))
         logger.addHandler(stderrhandler)
+        self.log_handlers = [stderrhandler]
         self.outprefix = args.outprefix
         logfile = self.outprefix + '.log'
         self.loghandle = None
@@ -150,6 +151,7 @@ class TETyper:
         logfilehandler.setLevel(logging.DEBUG)
         logfilehandler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s: %(message)s'))
         logger.addHandler(logfilehandler)
+        self.log_handlers.append(logfilehandler)
 
         logging.info('TETyper version {0}'.format(VERSION))
         logging.info('TETyper command: {0}'.format(' '.join(sys.argv)))
@@ -229,9 +231,12 @@ class TETyper:
         sys.exit(1)
 
     def cleanup(self):
+        logger = logging.getLogger()
+        for handler in self.log_handlers:
+            logger.removeHandler(handler)
+            handler.close()
         if self.loghandle is not None:
             self.loghandle.close()
-        logging.shutdown()
 
     def fq_cleanup(self):
         fq1 = self.outprefix + '_mappedreads_1.fq'
@@ -716,6 +721,8 @@ def tidy_dir(names):
         for item in os.listdir('.'):
             if item.startswith(name):
                 shutil.move(item, name)
+
+
 if __name__ == '__main__':
     parser = get_argsparser()
     args = parser.parse_args()

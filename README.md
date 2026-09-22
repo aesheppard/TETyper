@@ -46,13 +46,12 @@ Note that the exact values in the Left_flank_counts and Right_flank_counts colum
 #### Running a single sample
 
 ```
+# If only reads are available
 TETyper.py --ref REFERENCE.fasta --fq1 FORWARD_READS.fq.gz --fq2 REVERSE_READS.fq.gz --outprefix OUTPREFIX --flank_len FLANK_LENGTH
 ```
-
-For example, to run the provided test dataset:
-
 ```
-TETyper.py --ref Tn4401b-1.fasta --fq1 SRR1582895_sm_1.fq.gz --fq2 SRR1582895_sm_2.fq.gz --outprefix test --flank_len 5 --struct_profiles struct_profiles.txt --snp_profiles snp_profiles.txt --show_region 7202-8083
+# If a bam file is available
+TETyper.py --ref REFERENCE.fasta --bam MAPPED_READS.bam --outprefix OUTPREFIX --flank_len FLANK_LENGTH
 ```
 
 #### Running multiple samples
@@ -66,28 +65,16 @@ sample_2	sample_2_fwd_reads.fq.gz	sample_2_rev_reads.fq.gz
 sample_3			sample_3.bam
 ```
 
-- Leave `fq1`/`fq2` blank (but still tab-separated) for a sample supplied as a `--bam` instead, and vice versa. If you're new to TETyper, ignore the `bam` column entirely (just keep it blank) - see "Re-running samples" below for when it's useful.
+- Leave `fq1`/`fq2` blank (but still tab-separated) for a sample supplied as a `--bam` instead
 - If both `bam` and `fq1`/`fq2` are given for the same sample, the `bam` file is used and mapping is skipped for that sample.
+- Specify how many samples are processed concurrently with `--jobs`
 - All other options (`--ref`, `--flank_len`, `--struct_profiles`, etc.) are shared across every sample in the config file and are given on the command line as usual, e.g.:
 
 ```
-TETyper.py --config sample_data.txt --ref Tn4401b-1.fasta --flank_len 5 --struct_profiles struct_profiles.txt --snp_profiles snp_profiles.txt --show_region 7202-8083 --jobs 4
+TETyper.py --config sample_bulk_run.txt --ref Tn4401b-1.fasta --flank_len 5 --struct_profiles struct_profiles.txt --snp_profiles snp_profiles.txt --show_region 7202-8083 --jobs 4
 ```
 
-This produces one `OUTPREFIX_summary.txt` per sample plus a combined `all_summary.txt` containing every sample's row (see Output below). A ready-to-use example, matching the provided test dataset, is in `sample_data.txt`.
-
-#### Speeding things up
-
-Two options control parallelism, and they multiply together:
-
-- `--threads`: threads used within one sample's bwa/samtools/spades/blastn steps.
-- `--jobs`: how many samples run at once (only relevant with `--config`).
-
-Total CPU usage is roughly `jobs * threads`, so pick values whose product doesn't exceed your machine's core count. For a single sample, just raise `--threads`. For a batch, a moderate number of jobs with a few threads each usually beats either extreme - e.g. on 16 cores, try `--jobs 4 --threads 4` rather than `--jobs 16 --threads 1` or `--jobs 1 --threads 16`. If you see memory pressure from concurrent spades runs, lower `--jobs`.
-
-Other ways to save time:
-- `--bam`/`--assembly` skip mapping/assembly on repeat runs (see "Re-running samples").
-- `--mode flanks` or `--mode variants` skips whichever half of the pipeline you don't need (see Modes below).
+This produces one `OUTPREFIX_summary.txt` per sample plus a combined `all_summary.txt` containing every sample's row (see Output below).
 
 ### Output
 
@@ -118,7 +105,7 @@ The summary file contains up to 12 columns when running mode "all" (see Modes be
 
 ### Modes
 
-The `--mode` option (default `all`) controls which stages of the pipeline run, and therefore which columns appear in the summary file:
+The `--mode` option (default `all`) controls which stages of the pipeline run:
 
 | `--mode` | Runs | Skips | Summary columns |
 | --- | --- | --- | --- |
@@ -126,7 +113,6 @@ The `--mode` option (default `all`) controls which stages of the pipeline run, a
 | `variants` | deletion/BLAST + SNP calling only | flank extraction | Deletions, Structural_variant, SNPs_homozygous, SNPs_heterozygous, Heterozygous_SNP_counts, SNP_variant, Combined_variant (+ `X_Y_presence` if `--show_region` is set) |
 | `flanks` | flank extraction only | assembly, BLAST, SNP calling | Left_flanks, Right_flanks, Left_flank_counts, Right_flank_counts |
 
-Every mode includes a `Sample_name` column (from `--outprefix`) as the first column. `flanks` mode skips assembly and BLAST, usually the slowest steps.
 
 ### Advanced usage (all options):
 -  -h, --help:            show this help message and exit
