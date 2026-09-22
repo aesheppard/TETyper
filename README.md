@@ -11,11 +11,11 @@ TETyper can be cited as follows:
 
 Requirements:
 
-- python 3 (<3.11) (with Biopython, pysam, pyvcf3)
-- [samtools, bcftools](http://www.htslib.org/) (tested on version 1.18)
-- [bwa](http://bio-bwa.sourceforge.net/) (tested on version 0.7.17)
-- [spades](http://cab.spbu.ru/software/spades/) (tested on version 3.15.5)
-- [BLAST+](https://www.ncbi.nlm.nih.gov/books/NBK279690/) (tested on version 2.15.0)
+- python 3 (tested on version 3.11.16) (with Biopython, pysam, pyvcf3)
+- [samtools, bcftools](http://www.htslib.org/) (tested on version 1.24)
+- [bwa](http://bio-bwa.sourceforge.net/) (tested on version 0.7.19)
+- [spades](http://cab.spbu.ru/software/spades/) (tested on version 4.3.0)
+- [BLAST+](https://www.ncbi.nlm.nih.gov/books/NBK279690/) (tested on version 2.17.0)
 
 An `environment.yml` is provided with all of the above pinned to the tested versions. Create and activate the environment with:
 
