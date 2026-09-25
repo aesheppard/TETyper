@@ -4,8 +4,7 @@ TETyper is a command line tool designed for typing a specific transposable eleme
 
 TETyper can be cited as follows:
 
-[Sheppard et al bioRxiv 288001; doi: https://doi.org/10.1101/288001](https://www.biorxiv.org/content/early/2018/03/23/288001)
-
+[Sheppard, Anna E et al. “TETyper: a bioinformatic pipeline for classifying variation and genetic contexts of transposable elements from short-read whole-genome sequencing data.” Microbial genomics vol. 4,12 (2018): e000232. doi:10.1099/mgen.0.000232](https://pmc.ncbi.nlm.nih.gov/articles/PMC6412039/)
 
 ## Installation
 
@@ -46,12 +45,7 @@ Note that the exact values in the Left_flank_counts and Right_flank_counts colum
 #### Running a single sample
 
 ```
-# If only reads are available
 TETyper.py --ref REFERENCE.fasta --fq1 FORWARD_READS.fq.gz --fq2 REVERSE_READS.fq.gz --outprefix OUTPREFIX --flank_len FLANK_LENGTH
-```
-```
-# If a bam file is available
-TETyper.py --ref REFERENCE.fasta --bam MAPPED_READS.bam --outprefix OUTPREFIX --flank_len FLANK_LENGTH
 ```
 
 #### Running multiple samples
@@ -75,6 +69,17 @@ TETyper.py --config sample_bulk_run.txt --ref Tn4401b-1.fasta --flank_len 5 --st
 ```
 
 This produces one `OUTPREFIX_summary.txt` per sample plus a combined `all_summary.txt` containing every sample's row (see Output below).
+
+#### Re-running samples
+
+TETyper provides options for specifying the mapped bam file and/or assembly file in order to save processing time if the same samples are rerun with different parameters. For example, newly discovered profiles can be manually appended to the profile files. TETyper can then be rerun with the modified profile files, without redoing all the processing steps, by specifiying the mapped bam file and spades assembly as parameters instead of the original reads. E.g.:
+
+```
+TETyper.py --ref Tn4401b-1.fasta --outprefix RERUN --bam OUTPREFIX.bam --assembly OUTPREFIX_spades/contigs.fasta --flank_len FLANK_LENGTH --struct_profiles STRUCT_PROFILES_MODIFIED.txt --snp_profiles SNP_PROFILES_MODIFIED.txt --show_region 7202-8083
+```
+
+The --bam and --assembly options can also be useful for re-running samples with different parameters for flanking sequence extraction (e.g. a different flank length).
+
 
 ### Output
 
@@ -222,18 +227,6 @@ TETyper was designed with the blaKPC transposon Tn4401 in mind. A Tn4401b refere
 ```
 TETyper.py --ref Tn4401b-1.fasta --fq1 FORWARD_READS.fq.gz --fq2 REVERSE_READS.fq.gz --outprefix OUTPREFIX --flank_len FLANK_LENGTH --struct_profiles struct_profiles.txt --snp_profiles snp_profiles.txt --show_region 7202-8083
 ```
-
-
-### Re-running samples
-
-TETyper provides options for specifying the mapped bam file and/or assembly file in order to save processing time if the same samples are rerun with different parameters. For example, newly discovered profiles can be manually appended to the profile files. TETyper can then be rerun with the modified profile files, without redoing all the processing steps, by specifiying the mapped bam file and spades assembly as parameters instead of the original reads. E.g.:
-
-```
-TETyper.py --ref Tn4401b-1.fasta --outprefix RERUN --bam OUTPREFIX.bam --assembly OUTPREFIX_spades/contigs.fasta --flank_len FLANK_LENGTH --struct_profiles STRUCT_PROFILES_MODIFIED.txt --snp_profiles SNP_PROFILES_MODIFIED.txt --show_region 7202-8083
-```
-
-The --bam and --assembly options can also be useful for re-running samples with different parameters for flanking sequence extraction (e.g. a different flank length).
-
 
 ### Changes in version 1.2
 - Removed support for reverse/forward interleaved fq files.
