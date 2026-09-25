@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+
 """
 TETyper: a tool for typing transposable elements from whole-genome sequencing data
 Copyright (C) 2018 Anna Sheppard
@@ -16,8 +17,9 @@ GNU General Public License for more details.
 You should have received a copy of the GNU General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """
-
+import shutil
 import argparse
+from itertools import islice
 import sys
 import os
 import logging
@@ -26,14 +28,14 @@ from Bio import SeqIO
 import pysam
 import vcf
 from collections import Counter
+import multiprocessing
+import copy
 
-VERSION = '1.1'
-
+VERSION = '1.2'
 
 class ProfileError(Exception):
     def __init__(self, value):
         self.value = value
-
 
 class ProfileMatcher:
     def __init__(self, profile_file, nonestring, delim, sep='\t', start_pos=None, end_pos=None):
@@ -63,7 +65,7 @@ class ProfileMatcher:
 
     def validate_profile(self, profile):
         pass
-        
+
 
 class StructProfileMatcher(ProfileMatcher):
     def validate_profile(self, profile):
@@ -85,8 +87,8 @@ class StructProfileMatcher(ProfileMatcher):
             if prev_end is not None and start <= prev_end + 1:
                 raise ProfileError('Incorrectly ordered or overlapping ranges: "{0}" and "{1}"'.format(str(prev_start) + '-' + str(prev_end), str(start) + '-' + str(end)))
             prev_start, prev_end = start, end
-        
-                                                
+
+
 class SNPProfileMatcher(ProfileMatcher):
     def validate_profile(self, profile):
         try:
@@ -112,14 +114,13 @@ class SNPProfileMatcher(ProfileMatcher):
             bases = ['A','C','G','T']
             if ref not in bases:
                 raise ProfileError('Error parsing SNP "{0}": "{1}" is not a valid reference base. Allowed values are: A,C,G,T'.format(snp, ref))
-            if Nsite == False and alt not in bases:
+            if not Nsite and alt not in bases:
                 raise ProfileError('Error parsing SNP "{0}": "{1}" is not a valid homozygous SNP call. Allowed values are: A,C,G,T'.format(snp, alt))
-            if Nsite == True and alt not in ['M','R','W','S','Y','K']:
+            if Nsite and alt not in ['M','R','W','S','Y','K']:
                 raise ProfileError('Error parsing SNP "{0}": "{1}" is not a valid heterozygous SNP call. Allowed values are: M,R,W,S,Y,K'.format(snp, alt))
             if prev_pos is not None and pos <= prev_pos:
                 raise ProfileError('Incorrect ordering for "{0}" and "{1}". SNPs should be ordered by position.'.format(prev_pos, pos))
-
-
+            prev_pos = pos
 
 class TETyper:
 
@@ -135,6 +136,7 @@ class TETyper:
         stderrhandler.setLevel(loglevels[args.verbosity])
         stderrhandler.setFormatter(logging.Formatter('%(levelname)s: %(message)s'))
         logger.addHandler(stderrhandler)
+        self.log_handlers = [stderrhandler]
         self.outprefix = args.outprefix
         logfile = self.outprefix + '.log'
         self.loghandle = None
@@ -149,6 +151,7 @@ class TETyper:
         logfilehandler.setLevel(logging.DEBUG)
         logfilehandler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s: %(message)s'))
         logger.addHandler(logfilehandler)
+        self.log_handlers.append(logfilehandler)
 
         logging.info('TETyper version {0}'.format(VERSION))
         logging.info('TETyper command: {0}'.format(' '.join(sys.argv)))
@@ -161,7 +164,7 @@ class TETyper:
         if len(contigs) != 1:
             self.exitonerror('Error reading reference file {0}: Expected 1 contig, found {1}'.format(self.ref, len(contigs)))
         self.ref_start = 1
-        self.ref_contig, self.ref_end = list(contigs.items())[0]  
+        self.ref_contig, self.ref_end = list(contigs.items())[0]
         logging.info('Successfully read in reference of length {0}'.format(self.ref_end))
 
         # if blast database is explicitly specified, make sure it actually exists
@@ -175,14 +178,13 @@ class TETyper:
                 logging.info('Blast database not found. Creating database automatically.')
                 self.run_external_call([['makeblastdb', '-dbtype', 'nucl', '-in', self.ref]], 'blast database creation')
 
-        if args.bam:
+        if args.bam is not None:
             self.bam = args.bam
             self.bam_provided = True
         else:
-            self.fq_files = [fq for fq in [args.fq1, args.fq2, args.fq12] if fq is not None]
-            self.interleaved = True if args.fq12 else False
-            if not ((len(self.fq_files) == 2 and args.fq1 and args.fq2) or (len(self.fq_files) == 1 and self.interleaved == True)):
-                self.exitonerror('Invalid input. Exactly one of the following must be provided: (--fq1 AND --fq2) OR --fq12 OR --bam')
+            self.fq_files = [fq for fq in [args.fq1, args.fq2] if fq is not None]
+            if len(self.fq_files) != 2:
+                self.exitonerror('Invalid input. Exactly one of the following must be provided: (--fq1 AND --fq2) OR --bam')
             self.bam_provided = False
 
         if not self.bam_provided and not os.path.isfile(self.ref + '.bwt'):
@@ -202,6 +204,10 @@ class TETyper:
         self.min_each_strand = args.min_each_strand
         self.min_mapped_len = args.min_mapped_len
         self.min_qual = args.min_qual
+        self.keep_spades = args.keep_spades
+        self.mode = args.mode
+        self.tidy = args.tidy
+        self.spades_params = args.spades_params
 
         if args.show_region:
             self.show_region = args.show_region
@@ -224,12 +230,21 @@ class TETyper:
         self.cleanup()
         sys.exit(1)
 
-
     def cleanup(self):
+        logger = logging.getLogger()
+        for handler in self.log_handlers:
+            logger.removeHandler(handler)
+            handler.close()
         if self.loghandle is not None:
             self.loghandle.close()
-        logging.shutdown()
 
+    def fq_cleanup(self):
+        fq1 = self.outprefix + '_mappedreads_1.fq'
+        fq2 = self.outprefix + '_mappedreads_2.fq'
+        if os.path.isfile(fq1):
+            os.remove(fq1)
+        if os.path.isfile(fq2):
+            os.remove(fq2)
 
     def check_file(self, filename, checkexist='error', checkempty='warning'):
         if checkexist is not None and not os.path.isfile(filename):
@@ -279,13 +294,12 @@ class TETyper:
             proglist = list(set([args[0] for args in proc_args]))
             if len(proglist) == 1:
                 progs = proglist[0] + ' is'
-            else:
+            else: 
                 progs = ', '.join(proglist[:-1]) + ' and ' + proglist[-1] + ' are'
             self.exitonerror('Error executing {0}. Check that {1} available via $PATH.'.format(stage_name, progs))
 
         outputmessage = '' if outfile is None else 'Output stored in {0}'.format(outfile)
         logging.debug('{0} completed successfully. {1}'.format(stage_name[:1].upper() + stage_name[1:], outputmessage))
-
 
     def do_map(self):
         if self.bam_provided:
@@ -296,18 +310,13 @@ class TETyper:
         # Build up bwa mem command
         self.bam = self.outprefix + '.bam'
         bwa_mem_args = ['bwa', 'mem', '-t', str(self.threads)]
-        if self.interleaved:
-            bwa_mem_args.append('-p')
         bwa_mem_args.append(self.ref)
         for fq_file in self.fq_files:
             self.check_file(fq_file)
             bwa_mem_args.append(fq_file)
-
         samtools_view_args = ['samtools', 'view', '-bu', '-F2048', '-G12', '--threads', str(self.threads), '-']
         samtools_sort_args = ['samtools', 'sort', '-o', self.bam , '--threads', str(self.threads), '-']
-
         self.run_external_call([bwa_mem_args, samtools_view_args, samtools_sort_args], 'mapping', self.bam)
-
 
     def do_assembly(self):
         if self.assembly_provided:
@@ -328,9 +337,11 @@ class TETyper:
 
         # Run assembly
         spadesdir = self.outprefix + '_spades'
-        spades_args = ['spades.py', '-t', str(self.threads), '-o', spadesdir] + fq_args + args.spades_params.split()
+        spades_args = ['spades.py', '-t', str(self.threads), '-o', spadesdir] + fq_args + self.spades_params.split()
         self.run_external_call([spades_args], 'spades assembly', spadesdir + '/')
         self.assembly = spadesdir + '/contigs.fasta'
+        self.fq_cleanup()
+        self.clean_spades()
 
 
     def do_blast(self):
@@ -353,7 +364,7 @@ class TETyper:
                 for blasthit in blastfilehandle:
                     blasthitfields = blasthit.strip().split()
                     sstart, send = int(blasthitfields[8]), int(blasthitfields[9])
-                    hitranges.append((min(sstart, send), max(sstart, send))) 
+                    hitranges.append((min(sstart, send), max(sstart, send)))
         hitranges.sort()  # sort by hit start position
 
         # merge hit overlaps
@@ -417,9 +428,9 @@ class TETyper:
 
     def generate_vcf(self):
         self.snpfile = self.outprefix + '.vcf'
-        samtools_mpileup_args = ['samtools', 'mpileup', '-uAIf', self.ref, self.bam]
+        bcftools_mpileup_args = ['bcftools', 'mpileup', '-AIf', self.ref, self.bam]
         bcftools_call_args = ['bcftools', 'call', '-mv', '-o', self.snpfile]
-        self.run_external_call([samtools_mpileup_args, bcftools_call_args], 'SNP calling', self.snpfile)
+        self.run_external_call([bcftools_mpileup_args, bcftools_call_args], 'SNP calling', self.snpfile)
         self.check_file(self.snpfile)
 
 
@@ -457,7 +468,7 @@ class TETyper:
 
     def parse_vcf(self):
         logging.debug('Parsing SNP calling output...')
-        varsites = [] 
+        varsites = []
         Nsites = []
         Nsite_counts = []
         del_varsites = []
@@ -504,7 +515,7 @@ class TETyper:
             except ProfileError as e:
                 self.exitonerror('Error reading SNP profile file: {0}'.format(e.value))
             self.snp_profile = snp_matcher.get_profile('\t'.join([self.varsite_string, self.Nsite_string]), default=self.UNKSTRING)
-            logging.info('SNP profile identified: {0}'.format(self.snp_profile)) 
+            logging.info('SNP profile identified: {0}'.format(self.snp_profile))
 
 
     def call_snps(self):
@@ -562,9 +573,16 @@ class TETyper:
 
 
     def write_output(self):
-        header = ['Deletions', 'Structural_variant', 'SNPs_homozygous', 'SNPs_heterozygous', 'Heterozygous_SNP_counts', 'SNP_variant', 'Combined_variant', 'Left_flanks', 'Right_flanks', 'Left_flank_counts', 'Right_flank_counts']
-        contents = [self.deletion_string, self.struct_profile, self.varsite_string, self.Nsite_string, self.Nsite_count_string, self.snp_profile, self.struct_profile + '-' + self.snp_profile, self.lflanks, self.rflanks, self.lcounts, self.rcounts]
-        if self.show_region:
+        if self.mode == "all":
+            header = ['Sample_name','Deletions', 'Structural_variant', 'SNPs_homozygous', 'SNPs_heterozygous', 'Heterozygous_SNP_counts', 'SNP_variant', 'Combined_variant', 'Left_flanks', 'Right_flanks', 'Left_flank_counts', 'Right_flank_counts']
+            contents = [self.outprefix, self.deletion_string, self.struct_profile, self.varsite_string, self.Nsite_string, self.Nsite_count_string, self.snp_profile, self.struct_profile + '-' + self.snp_profile, self.lflanks, self.rflanks, self.lcounts, self.rcounts]
+        elif self.mode == "flanks":
+            header = ['Sample_name', 'Left_flanks', 'Right_flanks', 'Left_flank_counts', 'Right_flank_counts']
+            contents = [self.outprefix, self.lflanks, self.rflanks, self.lcounts, self.rcounts]
+        elif self.mode == "variants":
+            header = ['Sample_name', 'Deletions', 'Structural_variant', 'SNPs_homozygous', 'SNPs_heterozygous', 'Heterozygous_SNP_counts', 'SNP_variant', 'Combined_variant']
+            contents = [self.outprefix, self.deletion_string, self.struct_profile, self.varsite_string, self.Nsite_string, self.Nsite_count_string, self.snp_profile, self.struct_profile + '-' + self.snp_profile]
+        if self.show_region and self.mode != "flanks":
             header.append('{0}_presence'.format(self.show_region))
             contents.append(str(self.region_present))
         outfile = self.outprefix + '_summary.txt'
@@ -576,26 +594,44 @@ class TETyper:
             self.exitonerror('Error writing file {0}'.format(outfile))
         logging.info('Final output written to: {0}'.format(outfile))
 
+    def clean_spades(self):
+        # delete all files in spades folder except contigs.fasta and log file
+        if not self.keep_spades:
+            sp_folder = self.outprefix + '_spades'
+            for dirpath, dirnames, filenames in os.walk('./'+ sp_folder, topdown = False):
+                for name in filenames:
+                    if name != 'contigs.fasta' and name != 'spades.log':
+                        try:
+                            os.remove(os.path.join(dirpath, name))
+                        except OSError:
+                            logging.warning('Could not remove file {}'.format(os.path.join(dirpath, name)))
+                for dirname in dirnames:
+                    try:
+                        os.rmdir(os.path.join(dirpath, dirname))
+                    except OSError:
+                       logging.warning('Could not remove directory {}'.format(os.path.join(dirpath, dirname)))
 
     def run_typing(self):
         self.do_map()
-        self.call_struct()
-        self.call_snps()
-        self.extract_flanks()
+        if self.mode != "flanks":
+            self.call_struct()
+            self.call_snps()
+        if self.mode != "variants":
+            self.extract_flanks()
         self.write_output()
         self.cleanup()
 
 
-
 def get_argsparser():
     parser = argparse.ArgumentParser(description = 'TETyper version {0}. Given a set of input reads and a reference, TETyper performs typing to identify: 1. deletions and SNP variation relative to the reference, and 2. the immediate (up to ~20bp) sequence(s) flanking the reference.'.format(VERSION))
-    parser.add_argument('--outprefix', help = 'Prefix to use for output files. Required.', required = True)
-    parser.add_argument('--ref', help = 'Reference sequence in fasta format. If not already indexed with bwa, this will be created automatically. A blast database is also required, again this will be created automatically if it does not already exist. Required.', required = True)
-    parser.add_argument('--refdb', help = 'Blast database corresponding to reference file (this argument is only needed if the blast database was created with a different name).')
+    parser.add_argument('--config', help = 'Tab-separated file listing multiple samples to run, with header "outprefix\\tfq1\\tfq2\\tbam" (leave fq1/fq2/bam blank for whichever inputs are not used for a given sample). Runs all listed samples, using --jobs to control how many run at once. Cannot be combined with --outprefix/--fq1/--fq2/--bam, which are for running a single sample directly.')
+    parser.add_argument('--outprefix', help = 'Prefix to use for output files. Required unless --config is given.')
     parser.add_argument('--fq1', help = 'Forward reads. Can be gzipped.')
     parser.add_argument('--fq2', help = 'Reverse reads. Can be gzipped.')
-    parser.add_argument('--fq12', help = 'Interleaved forward and reverse reads.')
-    parser.add_argument('--bam', help = 'Bam file containing reads mapped to the given reference. If the reads have already been mapped, this option saves time compared to specifying the reads in fastq format. If this option is specified then --fq* are ignored.')
+    parser.add_argument('--bam', help = 'Bam file containing reads mapped to the given reference, instead of supplying --fq1/--fq2.')
+    parser.add_argument('--jobs', help = "Number of samples to process concurrently when using --config. Each job uses --threads threads, so total CPU usage is roughly jobs * threads - keep that within your machine's core count. Default: 1", type = int, default = 1)
+    parser.add_argument('--ref', help = 'Reference sequence in fasta format. If not already indexed with bwa, this will be created automatically. A blast database is also required, again this will be created automatically if it does not already exist. Required.', required = True)
+    parser.add_argument('--refdb', help = 'Blast database corresponding to reference file (this argument is only needed if the blast database was created with a different name).')
     parser.add_argument('--assembly', help = 'Use this assembly (fasta format) for detecting structural variants instead of generating a new one. This option saves time if an assembly is already available.')
     parser.add_argument('--spades_params', help = 'Additional parameters for running spades assembly. Enclose in quotes and precede with a space. Default: " --cov-cutoff auto --disable-rr". Ignored if --assembly is specified.', default=' --cov-cutoff auto --disable-rr')
     parser.add_argument('--struct_profiles', help = 'File containing known structural variants. Tab separated format with two columns. First column is variant name. Second column contains a list of sequence ranges representing deletions relative to the reference, or "none" for no deletions. Each range should be written as "startpos-endpos", with multiple ranges ordered by start position and separated by a "|" with no extra whitespace.')
@@ -607,14 +643,96 @@ def get_argsparser():
     parser.add_argument('--min_qual', help = 'Minimum quality value across extracted flanking sequence. Default 10.', type = int, default = 10)
     parser.add_argument('--show_region', help = 'Display presence/absence for a specific region of interest within the reference (e.g. to display blaKPC presence/absence with the Tn4401b-1 reference, use "7202-8083")')
     parser.add_argument('--threads', help = 'Number of threads to use for mapping and assembly steps. Default: 1', type = int, default = 1)
-    parser.add_argument('-v', '--verbosity', help = 'Verbosity level for logging to stderr. 1 = ERROR, 2 = WARNING, 3 = INFO, 4 = DUBUG. Default: 3.', type = int, choices = [1,2,3,4], default = 3)
+    parser.add_argument('-v', '--verbosity', help = 'Verbosity level for logging to stderr. 1 = ERROR, 2 = WARNING, 3 = INFO, 4 = DEBUG. Default: 3.', type = int, choices = [1,2,3,4], default = 3)
     parser.add_argument('--no_overwrite', help = 'Flag to prevent accidental overwriting of previous output files. In this mode, the pipeline checks for a log file named according to the given output prefix. If it exists then the pipeline exits without modifying any files.', action = 'store_true')
+    parser.add_argument('--keep_spades', help = 'Keep whole spades folder. Default is to only keep contigs.fasta and log file.', action = 'store_true')
+    parser.add_argument('--mode', help = 'Run only variants (deletions, homo/heterozygous SNVs), only flank extraction, or whole pipeline. Options: "all", "flanks", "variants"', choices = ['all', 'flanks', 'variants'], default = 'all')
+    parser.add_argument('--tidy', help = 'Enabling this will move files from different samples (i.e. results, temp files and log files) into separate folders.', action = 'store_true')
     return(parser)
 
+def format_args(args):
+    # build one args object per sample: one per line of --config if given, otherwise a single
+    # sample taken directly from --outprefix/--fq1/--fq2/--bam
+    if args.config is None:
+        if not args.outprefix:
+            print('Either --config, or --outprefix (with --fq1/--fq2 or --bam), must be given.')
+            sys.exit(1)
+        return [args], [args.outprefix]
+
+    if not os.path.isfile(args.config):
+        print('Config file could not be found.')
+        sys.exit(1)
+    all_args = []
+    outprefixes = []
+    with open(args.config, 'r') as f:
+        for line in islice(f, 1, None):
+            line = line.strip()
+            if not line:
+                continue
+            words = [word.strip() for word in line.split('\t')]
+            words += [''] * (4 - len(words))  # pad in case trailing blank columns were omitted
+            words = [word if word not in ('', 'None') else None for word in words]  # blank or literal "None" both mean "not provided"
+            args_cp = copy.copy(args)
+            args_cp.outprefix = words[0]
+            args_cp.fq1 = words[1]
+            args_cp.fq2 = words[2]
+            args_cp.bam = words[3]
+            all_args.append(args_cp)
+            outprefixes.append(args_cp.outprefix)
+    return all_args, outprefixes
+
+def process_fun(args):
+    new_typer = TETyper(args)
+    new_typer.run_typing()
+
+
+
+def create_summary(input_files, output_file='all_summary.txt'):
+    with open(output_file, 'w') as out_file:
+        header_written = False
+        for filename in input_files:
+            with open(f"{filename}_summary.txt", 'r') as file:
+                header = next(file, None)
+                if header is None:
+                    continue
+                header = header.strip()
+                if not header_written:
+                    out_file.write(header + '\n')
+                    header_written = True
+                data = next(file, None)
+                if data is None:
+                    continue
+                data = data.strip()
+                out_file.write(data + '\n')
+
+def tidy_dir(names):
+    for name in names:
+        if not os.path.exists(name):
+            os.makedirs(name)
+        else:
+
+            for item in os.listdir(name):
+                item_path = os.path.join(name, item)
+                if os.path.isfile(item_path):
+                    os.remove(item_path)
+                elif os.path.isdir(item_path):
+                    shutil.rmtree(item_path)
+
+        for item in os.listdir('.'):
+            if item.startswith(name):
+                shutil.move(item, name)
 
 
 if __name__ == '__main__':
     parser = get_argsparser()
     args = parser.parse_args()
-    typer = TETyper(args)
-    typer.run_typing()
+    if args.jobs <= 0:
+        print('--jobs must be a positive integer.')
+        sys.exit(1)
+    user_args, outprefixes = format_args(args)
+    jobs = min(args.jobs, len(user_args))
+    with multiprocessing.Pool(processes=jobs) as pool:
+        pool.map(process_fun, user_args)
+    create_summary(outprefixes)
+    if args.tidy:
+        tidy_dir(outprefixes)

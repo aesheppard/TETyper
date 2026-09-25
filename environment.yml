@@ -1,0 +1,15 @@
+name:   TETyper_env
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - bcftools=1.24
+  - biopython=1.88
+  - blast=2.17.0
+  - bwa=0.7.19
+  - pysam=0.24.1
+  - python=3.11.16
+  - pyvcf=0.6.8
+  - samtools=1.24
+  - spades=4.3.0

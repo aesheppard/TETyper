@@ -4,23 +4,23 @@ TETyper is a command line tool designed for typing a specific transposable eleme
 
 TETyper can be cited as follows:
 
-[Sheppard et al bioRxiv 288001; doi: https://doi.org/10.1101/288001](https://www.biorxiv.org/content/early/2018/03/23/288001)
-
+[Sheppard, Anna E et al. “TETyper: a bioinformatic pipeline for classifying variation and genetic contexts of transposable elements from short-read whole-genome sequencing data.” Microbial genomics vol. 4,12 (2018): e000232. doi:10.1099/mgen.0.000232](https://pmc.ncbi.nlm.nih.gov/articles/PMC6412039/)
 
 ## Installation
 
 Requirements:
 
-- python 2.7 or python 3 (with Biopython, pysam, pyvcf)
-- [samtools, bcftools](http://www.htslib.org/) (tested on version 1.4.1)
-- [bwa](http://bio-bwa.sourceforge.net/) (tested on version 0.7.12)
-- [spades](http://cab.spbu.ru/software/spades/) (tested on version 3.10.1)
-- [BLAST+](https://www.ncbi.nlm.nih.gov/books/NBK279690/) (tested on version 2.2.25)
+- python 3 (tested on version 3.11.16) (with Biopython, pysam, pyvcf3)
+- [samtools, bcftools](http://www.htslib.org/) (tested on version 1.24)
+- [bwa](http://bio-bwa.sourceforge.net/) (tested on version 0.7.19)
+- [spades](http://cab.spbu.ru/software/spades/) (tested on version 4.3.0)
+- [BLAST+](https://www.ncbi.nlm.nih.gov/books/NBK279690/) (tested on version 2.17.0)
 
-TETyper is pip-installable, enabling automatic installation of python dependencies:
+An `environment.yml` is provided with all of the above pinned to the tested versions. Create and activate the environment with:
 
 ```
-pip install TETyper
+conda env create -f environment.yml
+conda activate TETyper_env
 ```
 
 To check whether TETyper is running correctly, a small test dataset has been provided. If the following command is executed:
@@ -42,9 +42,44 @@ Note that the exact values in the Left_flank_counts and Right_flank_counts colum
 
 ### Basic usage
 
+#### Running a single sample
+
 ```
 TETyper.py --ref REFERENCE.fasta --fq1 FORWARD_READS.fq.gz --fq2 REVERSE_READS.fq.gz --outprefix OUTPREFIX --flank_len FLANK_LENGTH
 ```
+
+#### Running multiple samples
+
+To type several samples in one run, provide a tab-separated `--config` file instead of `--outprefix`/`--fq1`/`--fq2`/`--bam`. The file needs a header row and one row per sample:
+
+```
+outprefix	fq1	fq2	bam
+sample_1	sample_1_fwd_reads.fq.gz	sample_1_rev_reads.fq.gz	
+sample_2	sample_2_fwd_reads.fq.gz	sample_2_rev_reads.fq.gz	
+sample_3			sample_3.bam
+```
+
+- Leave `fq1`/`fq2` blank (but still tab-separated) for a sample supplied as a `--bam` instead
+- If both `bam` and `fq1`/`fq2` are given for the same sample, the `bam` file is used and mapping is skipped for that sample.
+- Specify how many samples are processed concurrently with `--jobs`
+- All other options (`--ref`, `--flank_len`, `--struct_profiles`, etc.) are shared across every sample in the config file and are given on the command line as usual, e.g.:
+
+```
+TETyper.py --config sample_bulk_run.txt --ref Tn4401b-1.fasta --flank_len 5 --struct_profiles struct_profiles.txt --snp_profiles snp_profiles.txt --show_region 7202-8083 --jobs 4
+```
+
+This produces one `OUTPREFIX_summary.txt` per sample plus a combined `all_summary.txt` containing every sample's row (see Output below).
+
+#### Re-running samples
+
+TETyper provides options for specifying the mapped bam file and/or assembly file in order to save processing time if the same samples are rerun with different parameters. For example, newly discovered profiles can be manually appended to the profile files. TETyper can then be rerun with the modified profile files, without redoing all the processing steps, by specifiying the mapped bam file and spades assembly as parameters instead of the original reads. E.g.:
+
+```
+TETyper.py --ref Tn4401b-1.fasta --outprefix RERUN --bam OUTPREFIX.bam --assembly OUTPREFIX_spades/contigs.fasta --flank_len FLANK_LENGTH --struct_profiles STRUCT_PROFILES_MODIFIED.txt --snp_profiles SNP_PROFILES_MODIFIED.txt --show_region 7202-8083
+```
+
+The --bam and --assembly options can also be useful for re-running samples with different parameters for flanking sequence extraction (e.g. a different flank length).
+
 
 ### Output
 
@@ -53,12 +88,13 @@ TETyper produces the following output files:
 - **OUTPREFIX.log**: Log file containing details of individual steps performed, as well as any errors
 - **OUTPREFIX.bam**: Reads mapped to REFERENCE.bam
 - **OUTPREFIX_mappedreads_1.fq, OUTPREFIX_mappedreads_2.fq**: Mapped reads converted to fastq format
-- **OUTPREFIX_spades**: Directory containing spades assembly from mapped reads
+- **OUTPREFIX_spades**: Directory containing spades assembly from mapped reads. By default, only contigs.fasta and spades.log are kept. See *--keep_spades* option below to keep all files produced by spades.
 - **OUTPREFIX_blast.txt**: Tabular blastn results comparing the spades assembly to REFERENCE.fasta
 - **OUTPREFIX.vcf**: SNVs identified
+- **all_summary.txt**: Summary of all results generated in various **OUTPREFIX_summary.txt** files.
 
 
-The summary file contains 11-12 columns. These are:
+The summary file contains up to 12 columns when running mode "all" (see Modes below for other modes). These are:
 - **Deletions**: A list of sequence ranges corresponding to regions of the reference classified as deletions for this sample, or "none" for no deletions.
 - **Structural_variant**: If --struct_profiles is specified and the pattern of deletions above corresponds to one of these profiles, then the profile name is given, otherwise "unknown".
 - **SNPs_homozygous**: A list of homozygous SNPs identified, or "none".
@@ -72,11 +108,29 @@ The summary file contains 11-12 columns. These are:
 - **Right_flank_counts**: The number of high quality reads supporting each of the right flanking sequences.
 - **X_Y_presence**: If --show_region is specified as --show_region X-Y, this column shows 1 if the entirety of that region is classified as present (i.e. no overlap with deleted regions), or 0 otherwise. If --show_region is unspecified, this column is omitted.
 
+### Modes
+
+The `--mode` option (default `all`) controls which stages of the pipeline run:
+
+| `--mode` | Runs | Skips | Summary columns |
+| --- | --- | --- | --- |
+| `all` (default) | everything | - | Deletions, Structural_variant, SNPs_homozygous, SNPs_heterozygous, Heterozygous_SNP_counts, SNP_variant, Combined_variant, Left_flanks, Right_flanks, Left_flank_counts, Right_flank_counts (+ `X_Y_presence` if `--show_region` is set) |
+| `variants` | deletion/BLAST + SNP calling only | flank extraction | Deletions, Structural_variant, SNPs_homozygous, SNPs_heterozygous, Heterozygous_SNP_counts, SNP_variant, Combined_variant (+ `X_Y_presence` if `--show_region` is set) |
+| `flanks` | flank extraction only | assembly, BLAST, SNP calling | Left_flanks, Right_flanks, Left_flank_counts, Right_flank_counts |
+
 
 ### Advanced usage (all options):
 -  -h, --help:            show this help message and exit
+-  --config CONFIG:      Tab-separated file listing multiple samples to run
+                        (see "Running multiple samples" above). Cannot be
+                        combined with --outprefix/--fq1/--fq2/--bam, which are
+                        for running a single sample directly.
+-  --jobs JOBS:           Number of samples to process concurrently when using
+                        --config (see "Making it as fast as possible" above).
+                        Default: 1
 -  --outprefix OUTPREFIX:
-                        Prefix to use for output files. Required.
+                        Prefix to use for output files. Required unless
+                        --config is given.
 -  --ref REF:             Reference sequence in fasta format. If not already
                         indexed with bwa, this will be created automatically.
                         A blast database is also required, again this will be
@@ -87,7 +141,6 @@ The summary file contains 11-12 columns. These are:
                         created with a different name).
 -  --fq1 FQ1:             Forward reads. Can be gzipped.
 -  --fq2 FQ2:             Reverse reads. Can be gzipped.
--  --fq12 FQ12:           Interleaved forward and reverse reads.
 -  --bam BAM:             Bam file containing reads mapped to the given
                         reference. If the reads have already been mapped, this
                         option saves time compared to specifying the reads in
@@ -149,12 +202,19 @@ The summary file contains 11-12 columns. These are:
                         steps. Default: 1
 -  -v, --verbosity:
                         Verbosity level for logging to stderr. 1 = ERROR, 2 =
-                        WARNING, 3 = INFO, 4 = DUBUG. Default: 3.
+                        WARNING, 3 = INFO, 4 = DEBUG. Default: 3.
 -  --no_overwrite:        Flag to prevent accidental overwriting of previous
                         output files. In this mode, the pipeline checks for a
                         log file named according to the given output prefix.
                         If it exists then the pipeline exits without modifying
                         any files.
+-   --keep_spades:      Keeps spades folder intact. Default: off (only
+                        contigs.fasta and spades.log are preserved.)
+-   --mode:             Run only variants (deletions, homo/heterozygous SNVs), only flank extraction, or whole
+                        pipeline. Options: "all", "flanks", "variants". Default: "all".
+-   --tidy:             When used with --config, move each sample's output,
+                        temp and log files into a subdirectory named after
+                        its outprefix once all samples have finished.
 
 
 ### A note on the profile files
@@ -163,19 +223,15 @@ The arguments --struct_profiles and --snp_profiles enable the user to specify a 
 
 
 ### Suggested usage for KPC isolates
-
 TETyper was designed with the blaKPC transposon Tn4401 in mind. A Tn4401b reference sequence is provided with TETyper (Tn4401b-1.fasta), as well as example profile definitions for SNVs / deletions with respect to this reference (struct_profiles.txt and snp_profiles.txt). To use these, TETyper can be run as follows:
 ```
 TETyper.py --ref Tn4401b-1.fasta --fq1 FORWARD_READS.fq.gz --fq2 REVERSE_READS.fq.gz --outprefix OUTPREFIX --flank_len FLANK_LENGTH --struct_profiles struct_profiles.txt --snp_profiles snp_profiles.txt --show_region 7202-8083
 ```
 
-
-### Re-running samples
-
-TETyper provides options for specifying the mapped bam file and/or assembly file in order to save processing time if the same samples are rerun with different parameters. For example, newly discovered profiles can be manually appended to the profile files. TETyper can then be rerun with the modified profile files, without redoing all the processing steps, by specifiying the mapped bam file and spades assembly as parameters instead of the original reads. E.g.:
-```
-TETyper.py --ref Tn4401b-1.fasta --outprefix RERUN --bam OUTPREFIX.bam --assembly OUTPREFIX_spades/contigs.fasta --flank_len FLANK_LENGTH --struct_profiles STRUCT_PROFILES_MODIFIED.txt --snp_profiles SNP_PROFILES_MODIFIED.txt --show_region 7202-8083
-```
-
-The --bam and --assembly options can also be useful for re-running samples with different parameters for flanking sequence extraction (e.g. a different flank length).
-
+### Changes in version 1.2
+- Removed support for reverse/forward interleaved fq files.
+- Updated dependencies to the latest versions (where possible).
+- Added options for running variant calling (deletions, homo/heterozygous SNVs) and flank extraction separately (`--mode`).
+- Implemented cleanup of files in the spades folder (with the `--keep_spades` option to retain them).
+- Added the ability to run multiple samples in one invocation via `--config`, with `--jobs` controlling how many run concurrently.
+- Included a summary file (`all_summary.txt`) encompassing all samples for easier processing, with `--tidy` to file each sample's outputs into its own subdirectory.
