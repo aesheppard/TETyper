@@ -20,6 +20,7 @@ TETyper is [conda installable](https://docs.conda.io/projects/conda/en/latest/us
 
 ```
 conda create -n TETyper_env -c conda-forge -c bioconda tetyper
+conda activate TETyper_env
 ```
 
 To check whether TETyper is running correctly, a small test dataset has been provided. If the following command is executed:
