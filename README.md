@@ -10,17 +10,16 @@ TETyper can be cited as follows:
 
 Requirements:
 
-- python 3 (tested on version 3.11.16) (with Biopython, pysam, pyvcf3)
+- Python 3 (tested on version 3.11.16) (with Biopython, pysam, pyvcf3)
 - [samtools, bcftools](http://www.htslib.org/) (tested on version 1.24)
 - [bwa](http://bio-bwa.sourceforge.net/) (tested on version 0.7.19)
 - [spades](http://cab.spbu.ru/software/spades/) (tested on version 4.3.0)
 - [BLAST+](https://www.ncbi.nlm.nih.gov/books/NBK279690/) (tested on version 2.17.0)
 
-An `environment.yml` is provided with all of the above pinned to the tested versions. Create and activate the environment with:
+TETyper is [conda installable](https://docs.conda.io/projects/conda/en/latest/user-guide/install/index.html), enabling automatic installation of Python dependencies:
 
 ```
-conda env create -f environment.yml
-conda activate TETyper_env
+conda create -n TETyper_env -c conda-forge -c bioconda tetyper
 ```
 
 To check whether TETyper is running correctly, a small test dataset has been provided. If the following command is executed:
